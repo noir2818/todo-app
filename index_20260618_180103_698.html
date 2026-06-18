@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todo+笔记管理</title>
+<style>
+:root {
+  --primary: #42a5f5;
+  --primary-dark: #1e88e5;
+  --primary-light: #e3f2fd;
+  --bg: #f5f8fc;
+  --surface: #ffffff;
+  --text: #263238;
+  --text-secondary: #607d8b;
+  --border: #e0e8f0;
+  --danger: #ef5350;
+  --warning: #ff9800;
+  --success: #66bb6a;
+  --p0: #ef5350; --p1: #ff9800; --p2: #42a5f5; --p3: #b0bec5;
+  --shadow: 0 2px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --transition: 0.2s ease;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg); color: var(--text); min-height:100vh;
+  display:flex; justify-content:center;
+}
+.app-container {
+  width:100%; max-width:960px; min-height:100vh; display:flex; flex-direction:column;
+  background: var(--surface); box-shadow: var(--shadow);
+}
+header {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  color:#fff; padding:16px 24px; display:flex; align-items:center; justify-content:space-between;
+  position:sticky; top:0; z-index:100;
+}
+header h1 { font-size:1.3rem; font-weight:600; letter-spacing:0.5px; }
+header .ai-btn {
+  background: rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.35); color:#fff;
+  padding:6px 14px; border-radius:20px; cursor:pointer; font-size:0.85rem;
+  display:flex; align-items:center; gap:6px; transition: var(--transition);
+}
+header .ai-btn:hover { background: rgba(255,255,255,0.3); }
+
+main { flex:1; padding:16px 20px 80px; overflow-y:auto; }
+
+/* Tab Navigation */
+.tab-nav {
+  position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:960px;
+  background: var(--surface); border-top:1px solid var(--border); display:flex;
+  z-index:100; box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+}
+.tab-nav button {
+  flex:1; padding:10px 8px; border:none; background:none; cursor:pointer;
+  font-size:0.8rem; color: var(--text-secondary); display:flex; flex-direction:column;
+  align-items:center; gap:3px; transition: var(--transition); position:relative;
+}
+.tab-nav button .tab-icon { font-size:1.3rem; }
+.tab-nav button.active { color: var(--primary); }
+.tab-nav button.active::after {
+  content:''; position:absolute; top:0; left:50%; transform:translateX(-50%);
+  width:24px; height:3px; background: var(--primary); border-radius:0 0 3px 3px;
+}
+
+/* Tab panels */
+.tab-panel { display:none; }
+.tab-panel.active { display:block; animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+
+/* Filter bar */
+.filter-bar {
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px;
+  padding:12px 16px; background: var(--primary-light); border-radius: var(--radius);
+}
+.filter-bar .filter-group { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+.filter-bar .filter-label { font-size:0.8rem; color: var(--text-secondary); margin-right:2px; white-space:nowrap; }
+.filter-btn {
+  padding:5px 12px; border:1px solid var(--border); border-radius:16px; background:#fff;
+  cursor:pointer; font-size:0.78rem; color: var(--text-secondary); transition: var(--transition);
+  white-space:nowrap;
+}
+.filter-btn:hover { border-color: var(--primary); color: var(--primary); }
+.filter-btn.active { background: var(--primary); color:#fff; border-color: var(--primary); }
+.filter-btn.p0 { color:var(--p0); border-color:var(--p0); }
+.filter-btn.p0.active { background:var(--p0); color:#fff; }
+.filter-btn.p1 { color:var(--p1); border-color:var(--p1); }
+.filter-btn.p1.active { background:var(--p1); color:#fff; }
+.filter-btn.p2 { color:var(--p2); border-color:var(--p2); }
+.filter-btn.p2.active { background:var(--p2); color:#fff; }
+.filter-btn.p3 { color:var(--p3); border-color:var(--p3); }
+.filter-btn.p3.active { background:var(--p3); color:#fff; }
+
+/* Action bar */
+.action-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.action-bar h2 { font-size:1.1rem; font-weight:600; }
+.add-btn {
+  background: var(--primary); color:#fff; border:none; padding:8px 18px; border-radius:20px;
+  cursor:pointer; font-size:0.85rem; font-weight:500; display:flex; align-items:center; gap:5px;
+  transition: var(--transition);
+}
+.add-btn:hover { background: var(--primary-dark); transform:translateY(-1px); }
+
+/* Table */
+.table-wrap { overflow-x:auto; border-radius: var(--radius); border:1px solid var(--border); }
+table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+thead { background: var(--primary-light); }
+th {
+  padding:10px 8px; text-align:left; font-weight:600; color: var(--text-secondary);
+  border-bottom:2px solid var(--border); white-space:nowrap; cursor:default; user-select:none;
+}
+th.sortable { cursor:pointer; }
+th.sortable:hover { color: var(--primary); }
+th .sort-arrow { margin-left:3px; font-size:0.7rem; }
+td { padding:9px 8px; border-bottom:1px solid var(--border); }
+tr:hover { background: var(--primary-light); }
+tr:last-child td { border-bottom:none; }
+
+.status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; }
+.status-urgent { background:var(--danger); }
+.status-important { background:var(--warning); }
+.status-done { background:var(--success); }
+
+.priority-badge {
+  display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.75rem; font-weight:600;
+  color:#fff;
+}
+.priority-p0 { background: var(--p0); }
+.priority-p1 { background: var(--p1); }
+.priority-p2 { background: var(--p2); }
+.priority-p3 { background: var(--p3); }
+
+.tag { display:inline-block; padding:2px 8px; border-radius:10px; background: #e8eaf6; color:#5c6bc0; font-size:0.75rem; margin:1px 2px; }
+
+.action-link { color: var(--primary); cursor:pointer; font-size:0.8rem; margin:0 4px; text-decoration:none; }
+.action-link:hover { text-decoration:underline; color: var(--primary-dark); }
+.action-link.danger { color: var(--danger); }
+.action-link.danger:hover { color: #c62828; }
+
+.task-name { cursor:pointer; color: var(--primary-dark); font-weight:500; }
+.task-name:hover { text-decoration:underline; }
+.note-title { cursor:pointer; color: var(--primary-dark); font-weight:500; }
+.note-title:hover { text-decoration:underline; }
+.note-summary { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.section-title { font-size:0.75rem; color: var(--text-secondary); text-transform:uppercase; letter-spacing:1px; margin:16px 0 8px; }
+
+/* Modal */
+.modal-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4);
+  z-index:200; justify-content:center; align-items:flex-start; padding:40px 16px;
+  overflow-y:auto;
+}
+.modal-overlay.open { display:flex; }
+.modal {
+  background: var(--surface); border-radius: var(--radius); width:100%; max-width:640px;
+  box-shadow: var(--shadow-lg); animation: slideUp 0.25s ease;
+}
+@keyframes slideUp { from{opacity:0;transform:translateY(20px);} to{opacity:1;transform:translateY(0);} }
+.modal-header {
+  padding:16px 20px; border-bottom:1px solid var(--border);
+  display:flex; justify-content:space-between; align-items:center;
+}
+.modal-header h3 { font-size:1.1rem; }
+.modal-close { background:none; border:none; font-size:1.2rem; cursor:pointer; color:var(--text-secondary); padding:4px 8px; }
+.modal-close:hover { color:var(--danger); }
+.modal-body { padding:20px; max-height:60vh; overflow-y:auto; }
+.modal-footer { padding:12px 20px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+.modal-footer button {
+  padding:7px 16px; border-radius: var(--radius-sm); border:1px solid var(--border);
+  background:#fff; cursor:pointer; font-size:0.85rem; transition: var(--transition);
+}
+.modal-footer button:hover { background: var(--primary-light); }
+.modal-footer button.primary { background: var(--primary); color:#fff; border-color: var(--primary); }
+.modal-footer button.primary:hover { background: var(--primary-dark); }
+.modal-footer button.danger { background: var(--danger); color:#fff; border-color: var(--danger); }
+.modal-footer button.danger:hover { background: #c62828; }
+
+.detail-section { margin-bottom:16px; }
+.detail-section h4 { font-size:0.85rem; color: var(--text-secondary); margin-bottom:6px; }
+.detail-row { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:8px; }
+.detail-chip {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:4px 10px; background: var(--primary-light); border-radius:14px;
+  font-size:0.8rem;
+}
+
+/* Form */
+.form-group { margin-bottom:14px; }
+.form-group label { display:block; font-size:0.82rem; font-weight:500; color: var(--text-secondary); margin-bottom:4px; }
+.form-group input, .form-group select, .form-group textarea {
+  width:100%; padding:8px 12px; border:1px solid var(--border); border-radius: var(--radius-sm);
+  font-size:0.9rem; font-family:inherit; transition: var(--transition); background:#fafbfc;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  outline:none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(66,165,245,0.15);
+}
+.form-group textarea { resize:vertical; min-height:70px; }
+.form-row { display:flex; gap:12px; }
+.form-row .form-group { flex:1; }
+
+/* Stats */
+.stats-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:12px; margin-bottom:20px; }
+.stat-card {
+  background: var(--primary-light); border-radius: var(--radius); padding:16px;
+  text-align:center; border:1px solid var(--border);
+}
+.stat-card .stat-num { font-size:1.8rem; font-weight:700; color: var(--primary-dark); }
+.stat-card .stat-label { font-size:0.8rem; color: var(--text-secondary); margin-top:4px; }
+.stat-card.warning .stat-num { color: var(--warning); }
+.stat-card.danger .stat-num { color: var(--danger); }
+.stat-card.success .stat-num { color: var(--success); }
+
+.chart-bar-wrap { margin-top:12px; }
+.chart-bar-item { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.chart-bar-label { width:60px; font-size:0.8rem; color: var(--text-secondary); text-align:right; }
+.chart-bar-track { flex:1; height:22px; background:#eee; border-radius:11px; overflow:hidden; }
+.chart-bar-fill { height:100%; border-radius:11px; transition:width 0.5s ease; }
+
+/* Settings */
+.setting-item {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px 0; border-bottom:1px solid var(--border);
+}
+.setting-item .setting-label { font-size:0.9rem; }
+.setting-item .setting-desc { font-size:0.78rem; color: var(--text-secondary); }
+.setting-item select, .setting-item input[type=checkbox] { cursor:pointer; }
+
+/* Empty state */
+.empty-state { text-align:center; padding:40px 20px; color: var(--text-secondary); }
+.empty-state .empty-icon { font-size:3rem; margin-bottom:12px; }
+.empty-state p { font-size:0.9rem; }
+
+/* Toast */
+.toast {
+  position:fixed; top:20px; left:50%; transform:translateX(-50%); z-index:300;
+  background:#323232; color:#fff; padding:10px 24px; border-radius:20px;
+  font-size:0.85rem; animation: toastIn 0.3s ease; pointer-events:none;
+}
+@keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(-10px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
+
+.overdue { color: var(--danger); font-weight:500; }
+
+/* Dark background for stat cards variation */
+.stat-card.p0-bg { background: #ffebee; border-color: #ffcdd2; }
+.stat-card.p1-bg { background: #fff3e0; border-color: #ffe0b2; }
+.stat-card.p2-bg { background: #e3f2fd; border-color: #bbdefb; }
+.stat-card.p3-bg { background: #f5f5f5; border-color: #e0e0e0; }
+
+@media (max-width:600px) {
+  .filter-bar { flex-direction:column; align-items:flex-start; }
+  .form-row { flex-direction:column; }
+  .modal { border-radius:var(--radius) var(--radius) 0 0; margin-top:auto; }
+  header { padding:12px 16px; }
+  header h1 { font-size:1.1rem; }
+  main { padding:12px 12px 80px; }
+}
+</style>
+</head>
+<body>
+
+<div class="app-container">
+  <header>
+    <h1>Todo+笔记</h1>
+    <button class="ai-btn" onclick="alert('AI 助手功能即将上线，敬请期待！')" title="AI助手（即将上线）">🤖 AI</button>
+  </header>
+
+  <main>
+    <!-- Tab: 任务 -->
+    <div class="tab-panel active" id="panel-tasks">
+      <div class="filter-bar" id="task-filter-bar"></div>
+      <div class="action-bar">
+        <h2>任务列表</h2>
+        <button class="add-btn" onclick="openTaskForm()">+ 新建任务</button>
+      </div>
+      <div class="table-wrap">
+        <table id="task-table">
+          <thead>
+            <tr>
+              <th style="width:50px">#</th>
+              <th>任务名</th>
+              <th>截止日期</th>
+              <th class="sortable" data-sort="status">状态 <span class="sort-arrow"></span></th>
+              <th>优先级</th>
+              <th>备注</th>
+              <th style="width:100px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="task-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab: 笔记 -->
+    <div class="tab-panel" id="panel-notes">
+      <div class="action-bar">
+        <h2>笔记列表</h2>
+        <button class="add-btn" onclick="openNoteForm()">+ 新建笔记</button>
+      </div>
+      <div class="table-wrap">
+        <table id="note-table">
+          <thead>
+            <tr>
+              <th style="width:50px">#</th>
+              <th>标题</th>
+              <th>类别</th>
+              <th>标签</th>
+              <th>正文摘要</th>
+              <th>创建时间</th>
+              <th style="width:100px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="note-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab: 统计 -->
+    <div class="tab-panel" id="panel-stats">
+      <div class="action-bar"><h2>数据统计</h2></div>
+      <div class="stats-grid" id="stats-cards"></div>
+      <div class="section-title">任务优先级分布</div>
+      <div class="chart-bar-wrap" id="priority-chart"></div>
+      <div class="section-title">任务状态分布</div>
+      <div class="chart-bar-wrap" id="status-chart"></div>
+    </div>
+
+    <!-- Tab: 设置 -->
+    <div class="tab-panel" id="panel-settings">
+      <div class="action-bar"><h2>设置</h2></div>
+      <div class="setting-item">
+        <div><div class="setting-label">默认视图</div><div class="setting-desc">打开应用时默认显示的Tab</div></div>
+        <select id="setting-default-tab" onchange="saveSettings()">
+          <option value="tasks">任务</option><option value="notes">笔记</option><option value="stats">统计</option>
+        </select>
+      </div>
+      <div class="setting-item">
+        <div><div class="setting-label">AI 助手</div><div class="setting-desc">智能辅助功能（即将上线）</div></div>
+        <span style="color:var(--text-secondary);font-size:0.8rem;">敬请期待</span>
+      </div>
+      <div class="setting-item">
+        <div><div class="setting-label">数据管理</div><div class="setting-desc">清除所有本地数据</div></div>
+        <button style="padding:6px 16px;border:1px solid var(--danger);color:var(--danger);background:#fff;border-radius:16px;cursor:pointer;" onclick="clearAllData()">清除数据</button>
+      </div>
+      <div class="setting-item">
+        <div><div class="setting-label">关于</div><div class="setting-desc">Todo+笔记管理 v1.0 | 数据存储于本地浏览器</div></div>
+      </div>
+    </div>
+  </main>
+
+  <nav class="tab-nav">
+    <button class="active" data-tab="tasks"><span class="tab-icon">📝</span>任务</button>
+    <button data-tab="notes"><span class="tab-icon">📋</span>笔记</button>
+    <button data-tab="stats"><span class="tab-icon">📊</span>统计</button>
+    <button data-tab="settings"><span class="tab-icon">⚙️</span>设置</button>
+  </nav>
+</div>
+
+<!-- Task Detail Modal -->
+<div class="modal-overlay" id="task-detail-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="task-detail-title">任务详情</h3>
+      <button class="modal-close" onclick="closeModal('task-detail-modal')">&times;</button>
+    </div>
+    <div class="modal-body" id="task-detail-body"></div>
+    <div class="modal-footer">
+      <button onclick="copyTask()">📋 复制</button>
+      <button onclick="toggleStarTask()">🔖 星标</button>
+      <button onclick="shareTask()">📤 分享</button>
+      <button onclick="editTaskFromDetail()">编辑</button>
+      <button class="danger" onclick="deleteTaskFromDetail()">🗑️ 删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Note Detail Modal -->
+<div class="modal-overlay" id="note-detail-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="note-detail-title">笔记详情</h3>
+      <button class="modal-close" onclick="closeModal('note-detail-modal')">&times;</button>
+    </div>
+    <div class="modal-body" id="note-detail-body"></div>
+    <div class="modal-footer">
+      <button onclick="copyNote()">📋 复制</button>
+      <button onclick="toggleStarNote()">🔖 星标</button>
+      <button onclick="shareNote()">📤 分享</button>
+      <button onclick="editNoteFromDetail()">编辑</button>
+      <button class="danger" onclick="deleteNoteFromDetail()">🗑️ 删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Task Form Modal -->
+<div class="modal-overlay" id="task-form-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="task-form-title">新建任务</h3>
+      <button class="modal-close" onclick="closeModal('task-form-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="task-edit-id">
+      <div class="form-row">
+        <div class="form-group"><label>任务名 *</label><input id="task-name" placeholder="输入任务名称"></div>
+        <div class="form-group"><label>类型</label><select id="task-type">
+          <option value="📝">📝 普通任务</option><option value="📅">📅 时间固定</option><option value="🔁">🔁 循环任务</option>
+        </select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>截止日期</label><input type="date" id="task-due"></div>
+        <div class="form-group"><label>状态</label><select id="task-status">
+          <option value="urgent">🔴 紧急</option><option value="important">🟠 重要</option><option value="done">🟢 已完成</option>
+        </select></div>
+        <div class="form-group"><label>优先级</label><select id="task-priority">
+          <option value="P0">P0 - 最高</option><option value="P1">P1 - 高</option><option value="P2" selected>P2 - 中</option><option value="P3">P3 - 低</option>
+        </select></div>
+      </div>
+      <div class="form-group"><label>概述</label><textarea id="task-overview" placeholder="任务概述..." rows="2"></textarea></div>
+      <div class="form-group"><label>标签（用逗号分隔）</label><input id="task-tags" placeholder="#工作, #个人"></div>
+      <div class="form-group"><label>备注</label><input id="task-remarks" placeholder="备注信息"></div>
+      <div class="form-group"><label>附件（文件名，用逗号分隔）</label><input id="task-attachments" placeholder="规格表.xlsx, 清单.csv"></div>
+      <div class="form-group"><label>关联任务ID（用逗号分隔）</label><input id="task-related-tasks" placeholder="任务ID列表"></div>
+      <div class="form-group"><label>关联笔记ID（用逗号分隔）</label><input id="task-related-notes" placeholder="笔记ID列表"></div>
+      <div class="form-group"><label>提醒时间（用逗号分隔，格式 YYYY-MM-DD HH:mm）</label><input id="task-reminders" placeholder="2026-06-20 10:00, 2026-06-20 14:00"></div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal('task-form-modal')">取消</button>
+      <button class="primary" onclick="saveTask()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Note Form Modal -->
+<div class="modal-overlay" id="note-form-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="note-form-title">新建笔记</h3>
+      <button class="modal-close" onclick="closeModal('note-form-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="note-edit-id">
+      <div class="form-row">
+        <div class="form-group"><label>标题 *</label><input id="note-title-input" placeholder="笔记标题"></div>
+        <div class="form-group"><label>类别</label><select id="note-category">
+          <option value="📂">📂 文件夹</option><option value="📝">📝 普通</option><option value="❤️">❤️ 收藏</option>
+        </select></div>
+      </div>
+      <div class="form-group"><label>正文内容</label><textarea id="note-content" placeholder="笔记正文..." rows="4"></textarea></div>
+      <div class="form-group"><label>标签（用逗号分隔）</label><input id="note-tags-input" placeholder="#美食, #旅行"></div>
+      <div class="form-group"><label>附件（文件名，用逗号分隔）</label><input id="note-attachments" placeholder="guide.pdf, 美食地图.png"></div>
+      <div class="form-group"><label>关联任务ID（用逗号分隔）</label><input id="note-related-tasks" placeholder="任务ID列表"></div>
+      <div class="form-group"><label>关联笔记ID（用逗号分隔）</label><input id="note-related-notes" placeholder="笔记ID列表"></div>
+      <div class="form-group"><label>备注事项（用逗号分隔）</label><input id="note-remarks" placeholder="事项1, 事项2"></div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal('note-form-modal')">取消</button>
+      <button class="primary" onclick="saveNote()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============ DATA STORE ============
+const STORE_KEY = 'todo_notes_app_data';
+let data = { tasks: [], notes: [], nextTaskId: 1, nextNoteId: 1 };
+let taskSort = { field: null, asc: true };
+let taskFilter = { status: 'all', priority: 'all' };
+let currentTaskId = null, currentNoteId = null;
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) { const parsed = JSON.parse(raw); data = { ...data, ...parsed }; }
+  } catch(e) { console.warn('数据加载失败，使用默认数据'); }
+}
+function saveData() { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
+
+function genTaskId() { return 'T' + String(data.nextTaskId++).padStart(4,'0'); saveData(); }
+function genNoteId() { return 'N' + String(data.nextNoteId++).padStart(4,'0'); saveData(); }
+
+// ============ SEED DATA ============
+function seedIfEmpty() {
+  if (data.tasks.length === 0 && data.notes.length === 0) {
+    const t1 = genTaskId(); const t2 = genTaskId(); const t3 = genTaskId();
+    const t4 = genTaskId(); const t5 = genTaskId();
+    data.tasks = [
+      { id:t1, name:'准备资金', type:'💰', dueDate:'2026-06-25', status:'urgent', priority:'P0', remarks:'筹集预算', overview:'为购物季准备充足的资金预算，预计需要5000元。', tags:['购物','财务'], attachments:['预算表.xlsx'], relatedTasks:[t2,t3], relatedNotes:[], reminders:['2026-06-22 09:00'], starred:false, createdAt:new Date().toISOString() },
+      { id:t2, name:'购买装备', type:'👗', dueDate:'2026-06-28', status:'important', priority:'P0', remarks:'户外装备', overview:'购买登山鞋、背包等户外装备，为出行做准备。', tags:['购物','户外'], attachments:[], relatedTasks:[t1], relatedNotes:[], reminders:[], starred:false, createdAt:new Date(Date.now()-86400000).toISOString() },
+      { id:t3, name:'清理文档', type:'🗑️', dueDate:'2026-06-20', status:'urgent', priority:'P0', remarks:'过期文件', overview:'清理桌面和下载文件夹中的过期文档，释放磁盘空间。', tags:['工作'], attachments:[], relatedTasks:[], relatedNotes:[], reminders:[], starred:false, createdAt:new Date(Date.now()-172800000).toISOString() },
+      { id:t4, name:'完成报告', type:'📝', dueDate:'2026-06-22', status:'important', priority:'P1', remarks:'季度报告', overview:'完成Q2季度工作总结报告，提交给部门经理审核。', tags:['工作','报告'], attachments:['Q2报告草稿.docx'], relatedTasks:[], relatedNotes:[], reminders:['2026-06-21 15:00'], starred:true, createdAt:new Date(Date.now()-259200000).toISOString() },
+      { id:t5, name:'每日锻炼', type:'🔁', dueDate:'2026-06-19', status:'done', priority:'P2', remarks:'已完成', overview:'每天30分钟有氧运动，保持健康。', tags:['健康','习惯'], attachments:[], relatedTasks:[], relatedNotes:[], reminders:[], starred:false, createdAt:new Date(Date.now()-345600000).toISOString() },
+    ];
+    const n1 = genNoteId(); const n2 = genNoteId(); const n3 = genNoteId();
+    data.notes = [
+      { id:n1, title:'上海美食攻略', category:'❤️', tags:['美食','上海','旅行'], content:'上海美食推荐：\n1. 南翔小笼包 - 城隍庙\n2. 生煎包 - 小杨生煎\n3. 蟹粉面 - 老吉士\n📷 照片占位符', createdAt:'2026-06-10 14:30:00', attachments:['guide.pdf','美食地图.png'], relatedTasks:[], relatedNotes:[n2], remarks:['预约餐厅','查看营业时间'], starred:true },
+      { id:n2, name:'旅行打包清单', category:'📂', tags:['旅行','清单'], content:'旅行必带物品：\n- 护照/身份证\n- 充电器/充电宝\n- 换洗衣物\n- 常用药品', createdAt:'2026-06-12 09:15:00', attachments:[], relatedTasks:[t2], relatedNotes:[n1], remarks:[], starred:false },
+      { id:n3, name:'读书笔记 - 深度工作', category:'📝', tags:['读书笔记','效率'], content:'《深度工作》核心观点：\n1. 深度工作是指在无干扰状态下进行的高专注认知活动\n2. 浅度工作是指非认知要求高、在分心状态下也能完成的任务\n3. 培养深度工作习惯的四个准则：...', createdAt:'2026-06-15 20:00:00', attachments:[], relatedTasks:[], relatedNotes:[], remarks:['整理思维导图','写读后感'], starred:false },
+    ];
+    // Fix cross-references
+    data.tasks[0].relatedNotes = [n1];
+    saveData();
+  }
+}
+
+// ============ HELPERS ============
+function fmtDate(d) { if(!d) return '-'; const dt=new Date(d); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
+function fmtDateTime(d) { if(!d) return '-'; return d; }
+function isOverdue(dueDate) { if(!dueDate) return false; const d=new Date(dueDate); d.setHours(23,59,59,999); return d < new Date(); }
+function isWithin3Days(dueDate) { if(!dueDate) return false; const d=new Date(dueDate); d.setHours(23,59,59,999); const now=new Date(); const diff=d-now; return diff>=0 && diff<=3*86400000; }
+function statusLabel(s) { const m={urgent:'🔴 紧急',important:'🟠 重要',done:'🟢 已完成'}; return m[s]||s; }
+function statusClass(s) { const m={urgent:'status-urgent',important:'status-important',done:'status-done'}; return m[s]||''; }
+function priorityClass(p) { const m={P0:'priority-p0',P1:'priority-p1',P2:'priority-p2',P3:'priority-p3'}; return m[p]||''; }
+function parseTags(s) { if(!s) return []; return s.split(',').map(t=>t.trim()).filter(t=>t).map(t=>t.startsWith('#')?t:'#'+t); }
+function parseList(s) { if(!s) return []; return s.split(',').map(x=>x.trim()).filter(x=>x); }
+function showToast(msg) { const t=document.createElement('div'); t.className='toast'; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),2200); }
+
+// ============ FILTER BAR ============
+function renderTaskFilterBar() {
+  const bar = document.getElementById('task-filter-bar');
+  bar.innerHTML = `
+    <span class="filter-label">筛选：</span>
+    <button class="filter-btn ${taskFilter.status==='all'?'active':''}" onclick="setTaskFilter('status','all')">全部</button>
+    <button class="filter-btn ${taskFilter.status==='undone'?'active':''}" onclick="setTaskFilter('status','undone')">未完成</button>
+    <button class="filter-btn ${taskFilter.status==='done'?'active':''}" onclick="setTaskFilter('status','done')">已完成</button>
+    <button class="filter-btn ${taskFilter.status==='expiring'?'active':''}" onclick="setTaskFilter('status','expiring')">过期3天内</button>
+    <span style="width:8px"></span>
+    <span class="filter-label">优先级：</span>
+    <button class="filter-btn p0 ${taskFilter.priority==='P0'?'active':''}" onclick="setTaskFilter('priority','P0')">P0</button>
+    <button class="filter-btn p1 ${taskFilter.priority==='P1'?'active':''}" onclick="setTaskFilter('priority','P1')">P1</button>
+    <button class="filter-btn p2 ${taskFilter.priority==='P2'?'active':''}" onclick="setTaskFilter('priority','P2')">P2</button>
+    <button class="filter-btn p3 ${taskFilter.priority==='P3'?'active':''}" onclick="setTaskFilter('priority','P3')">P3</button>
+    ${taskFilter.priority!=='all'||taskFilter.status!=='all'?`<button class="filter-btn" style="margin-left:8px" onclick="clearTaskFilter()">✕ 清除</button>`:''}
+  `;
+}
+
+function setTaskFilter(type, val) {
+  if (taskFilter[type] === val) { taskFilter[type] = 'all'; } else { taskFilter[type] = val; }
+  renderTaskFilterBar(); renderTasks();
+}
+function clearTaskFilter() { taskFilter = { status:'all', priority:'all' }; renderTaskFilterBar(); renderTasks(); }
+
+// ============ TASK TABLE ============
+function getFilteredTasks() {
+  let tasks = [...data.tasks];
+  if (taskFilter.status === 'undone') tasks = tasks.filter(t => t.status !== 'done');
+  else if (taskFilter.status === 'done') tasks = tasks.filter(t => t.status === 'done');
+  else if (taskFilter.status === 'expiring') tasks = tasks.filter(t => t.status !== 'done' && t.dueDate && isWithin3Days(t.dueDate));
+  if (taskFilter.priority !== 'all') tasks = tasks.filter(t => t.priority === taskFilter.priority);
+  if (taskSort.field) {
+    tasks.sort((a,b) => {
+      let va, vb;
+      if (taskSort.field === 'status') { const o={urgent:0,important:1,done:2}; va=o[a.status]??9; vb=o[b.status]??9; }
+      else if (taskSort.field === 'createdAt') { va=new Date(a.createdAt||0).getTime(); vb=new Date(b.createdAt||0).getTime(); }
+      else if (taskSort.field === 'dueDate') { va=a.dueDate||'9999'; vb=b.dueDate||'9999'; }
+      return taskSort.asc ? (va>vb?1:-1) : (va<vb?1:-1);
+    });
+  }
+  return tasks;
+}
+
+function renderTasks() {
+  const tasks = getFilteredTasks();
+  const tbody = document.getElementById('task-tbody');
+  if (tasks.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📝</div><p>暂无任务，点击"新建任务"开始</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = tasks.map((t,i) => {
+    const overdue = t.status !== 'done' && t.dueDate && isOverdue(t.dueDate);
+    return `<tr>
+      <td>${i+1}</td>
+      <td><span class="task-name" onclick="openTaskDetail('${t.id}')">${t.type} ${t.name}${t.starred?' ⭐':''}</span></td>
+      <td class="${overdue?'overdue':''}">${fmtDate(t.dueDate)}${overdue?' (已过期)':''}</td>
+      <td><span class="status-dot ${statusClass(t.status)}"></span>${statusLabel(t.status)}</td>
+      <td><span class="priority-badge ${priorityClass(t.priority)}">${t.priority}</span></td>
+      <td>${t.remarks||'-'}</td>
+      <td>
+        <a class="action-link" onclick="openEditTask('${t.id}')">编辑</a>
+        <a class="action-link danger" onclick="deleteTask('${t.id}')">删除</a>
+      </td>
+    </tr>`;
+  }).join('');
+  updateSortArrows();
+}
+
+function updateSortArrows() {
+  document.querySelectorAll('#task-table th.sortable').forEach(th => {
+    const f = th.dataset.sort;
+    const arrow = th.querySelector('.sort-arrow');
+    if (taskSort.field === f) { arrow.textContent = taskSort.asc ? '▲' : '▼'; }
+    else { arrow.textContent = ''; }
+  });
+}
+
+function sortTasks(field) {
+  if (taskSort.field === field) { taskSort.asc = !taskSort.asc; }
+  else { taskSort.field = field; taskSort.asc = true; }
+  renderTasks();
+}
+
+// ============ NOTE TABLE ============
+function renderNotes() {
+  const notes = data.notes;
+  const tbody = document.getElementById('note-tbody');
+  if (notes.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📋</div><p>暂无笔记，点击"新建笔记"开始</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = notes.map((n,i) => {
+    const summary = n.content ? (n.content.replace(/\n/g,' ').substring(0,60)+(n.content.length>60?'...':'')) : '';
+    return `<tr>
+      <td>${i+1}</td>
+      <td><span class="note-title" onclick="openNoteDetail('${n.id}')">${n.starred?'⭐ ':''}${n.title}</span></td>
+      <td>${n.category}</td>
+      <td>${(n.tags||[]).map(t=>`<span class="tag">#${t.replace(/^#/,'')}</span>`).join(' ')}</td>
+      <td class="note-summary" title="${(n.content||'').replace(/"/g,'&quot;')}">${summary||'-'}</td>
+      <td>${n.createdAt||'-'}</td>
+      <td>
+        <a class="action-link" onclick="openEditNote('${n.id}')">编辑</a>
+        <a class="action-link danger" onclick="deleteNote('${n.id}')">删除</a>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ============ TASK CRUD ============
+function openTaskForm(id) {
+  const modal = document.getElementById('task-form-modal');
+  if (id) {
+    const t = data.tasks.find(x=>x.id===id); if(!t) return;
+    document.getElementById('task-form-title').textContent = '编辑任务';
+    document.getElementById('task-edit-id').value = t.id;
+    document.getElementById('task-name').value = t.name;
+    document.getElementById('task-type').value = t.type;
+    document.getElementById('task-due').value = t.dueDate||'';
+    document.getElementById('task-status').value = t.status;
+    document.getElementById('task-priority').value = t.priority;
+    document.getElementById('task-overview').value = t.overview||'';
+    document.getElementById('task-tags').value = (t.tags||[]).join(', ');
+    document.getElementById('task-remarks').value = t.remarks||'';
+    document.getElementById('task-attachments').value = (t.attachments||[]).join(', ');
+    document.getElementById('task-related-tasks').value = (t.relatedTasks||[]).join(', ');
+    document.getElementById('task-related-notes').value = (t.relatedNotes||[]).join(', ');
+    document.getElementById('task-reminders').value = (t.reminders||[]).join(', ');
+  } else {
+    document.getElementById('task-form-title').textContent = '新建任务';
+    document.getElementById('task-edit-id').value = '';
+    ['task-name','task-overview','task-tags','task-remarks','task-attachments','task-related-tasks','task-related-notes','task-reminders'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('task-type').value = '📝';
+    document.getElementById('task-due').value = '';
+    document.getElementById('task-status').value = 'urgent';
+    document.getElementById('task-priority').value = 'P2';
+  }
+  modal.classList.add('open');
+}
+
+function openEditTask(id) { openTaskForm(id); }
+
+function saveTask() {
+  const id = document.getElementById('task-edit-id').value;
+  const name = document.getElementById('task-name').value.trim();
+  if (!name) { showToast('请输入任务名'); return; }
+  const obj = {
+    id: id || genTaskId(),
+    name,
+    type: document.getElementById('task-type').value,
+    dueDate: document.getElementById('task-due').value,
+    status: document.getElementById('task-status').value,
+    priority: document.getElementById('task-priority').value,
+    overview: document.getElementById('task-overview').value.trim(),
+    tags: parseTags(document.getElementById('task-tags').value),
+    remarks: document.getElementById('task-remarks').value.trim(),
+    attachments: parseList(document.getElementById('task-attachments').value),
+    relatedTasks: parseList(document.getElementById('task-related-tasks').value),
+    relatedNotes: parseList(document.getElementById('task-related-notes').value),
+    reminders: parseList(document.getElementById('task-reminders').value),
+    starred: id ? (data.tasks.find(t=>t.id===id)?.starred||false) : false,
+    createdAt: id ? (data.tasks.find(t=>t.id===id)?.createdAt||new Date().toISOString()) : new Date().toISOString()
+  };
+  if (id) {
+    const idx = data.tasks.findIndex(t=>t.id===id);
+    if (idx>=0) data.tasks[idx] = obj;
+  } else {
+    data.tasks.push(obj);
+  }
+  saveData(); closeModal('task-form-modal'); renderTasks(); updateStats();
+  showToast(id ? '任务已更新' : '任务已创建');
+}
+
+function deleteTask(id) {
+  if (!confirm('确定删除该任务吗？')) return;
+  data.tasks = data.tasks.filter(t=>t.id!==id); saveData();
+  renderTasks(); updateStats(); showToast('任务已删除');
+}
+
+// ============ NOTE CRUD ============
+function openNoteForm(id) {
+  const modal = document.getElementById('note-form-modal');
+  if (id) {
+    const n = data.notes.find(x=>x.id===id); if(!n) return;
+    document.getElementById('note-form-title').textContent = '编辑笔记';
+    document.getElementById('note-edit-id').value = n.id;
+    document.getElementById('note-title-input').value = n.title;
+    document.getElementById('note-category').value = n.category;
+    document.getElementById('note-content').value = n.content||'';
+    document.getElementById('note-tags-input').value = (n.tags||[]).join(', ');
+    document.getElementById('note-attachments').value = (n.attachments||[]).join(', ');
+    document.getElementById('note-related-tasks').value = (n.relatedTasks||[]).join(', ');
+    document.getElementById('note-related-notes').value = (n.relatedNotes||[]).join(', ');
+    document.getElementById('note-remarks').value = (n.remarks||[]).join(', ');
+  } else {
+    document.getElementById('note-form-title').textContent = '新建笔记';
+    document.getElementById('note-edit-id').value = '';
+    ['note-title-input','note-content','note-tags-input','note-attachments','note-related-tasks','note-related-notes','note-remarks'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('note-category').value = '📝';
+  }
+  modal.classList.add('open');
+}
+
+function openEditNote(id) { openNoteForm(id); }
+
+function saveNote() {
+  const id = document.getElementById('note-edit-id').value;
+  const title = document.getElementById('note-title-input').value.trim();
+  if (!title) { showToast('请输入笔记标题'); return; }
+  const now = new Date();
+  const createdAt = id ? (data.notes.find(n=>n.id===id)?.createdAt||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`) : `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const obj = {
+    id: id || genNoteId(),
+    title,
+    category: document.getElementById('note-category').value,
+    tags: parseTags(document.getElementById('note-tags-input').value),
+    content: document.getElementById('note-content').value,
+    createdAt,
+    attachments: parseList(document.getElementById('note-attachments').value),
+    relatedTasks: parseList(document.getElementById('note-related-tasks').value),
+    relatedNotes: parseList(document.getElementById('note-related-notes').value),
+    remarks: parseList(document.getElementById('note-remarks').value),
+    starred: id ? (data.notes.find(n=>n.id===id)?.starred||false) : false
+  };
+  if (id) {
+    const idx = data.notes.findIndex(n=>n.id===id);
+    if (idx>=0) data.notes[idx] = obj;
+  } else {
+    data.notes.push(obj);
+  }
+  saveData(); closeModal('note-form-modal'); renderNotes(); updateStats();
+  showToast(id ? '笔记已更新' : '笔记已创建');
+}
+
+function deleteNote(id) {
+  if (!confirm('确定删除该笔记吗？')) return;
+  data.notes = data.notes.filter(n=>n.id!==id); saveData();
+  renderNotes(); updateStats(); showToast('笔记已删除');
+}
+
+// ============ TASK DETAIL MODAL ============
+function openTaskDetail(id) {
+  const t = data.tasks.find(x=>x.id===id); if(!t) return;
+  currentTaskId = id;
+  document.getElementById('task-detail-title').textContent = t.type+' '+t.name+(t.starred?' ⭐':'');
+  const body = document.getElementById('task-detail-body');
+  const relatedTasks = (t.relatedTasks||[]).map(rid=>data.tasks.find(x=>x.id===rid)).filter(Boolean);
+  const relatedNotes = (t.relatedNotes||[]).map(rid=>data.notes.find(x=>x.id===rid)).filter(Boolean);
+  body.innerHTML = `
+    <div class="detail-section">
+      <h4>概述</h4>
+      <p style="font-size:0.9rem;line-height:1.6;">${t.overview||'无'}</p>
+    </div>
+    <div class="detail-section">
+      <h4>基本信息</h4>
+      <div class="detail-row">
+        <span class="detail-chip">状态：${statusLabel(t.status)}</span>
+        <span class="detail-chip">优先级：<span class="priority-badge ${priorityClass(t.priority)}">${t.priority}</span></span>
+        <span class="detail-chip">截止：${fmtDate(t.dueDate)}${t.status!=='done'&&t.dueDate&&isOverdue(t.dueDate)?' (已过期)':''}</span>
+        <span class="detail-chip">创建：${fmtDate(t.createdAt)}</span>
+      </div>
+    </div>
+    ${(t.reminders||[]).length>0?`
+    <div class="detail-section">
+      <h4>🔔 提醒方式</h4>
+      <div class="detail-row">${(t.reminders||[]).map(r=>`<span class="detail-chip">🔔 ${r}</span>`).join('')}</div>
+    </div>`:''}
+    ${(t.attachments||[]).length>0?`
+    <div class="detail-section">
+      <h4>📎 附件</h4>
+      <div class="detail-row">${(t.attachments||[]).map(a=>`<span class="detail-chip">💻 ${a}</span>`).join('')}</div>
+    </div>`:''}
+    ${(t.tags||[]).length>0?`
+    <div class="detail-section">
+      <h4>标签</h4>
+      <div>${(t.tags||[]).map(tg=>`<span class="tag">${tg}</span>`).join(' ')}</div>
+    </div>`:''}
+    ${relatedTasks.length>0?`
+    <div class="detail-section">
+      <h4>🔗 相关任务</h4>
+      <div class="detail-row">${relatedTasks.map(rt=>`<span class="detail-chip" style="cursor:pointer" onclick="closeModal('task-detail-modal');openTaskDetail('${rt.id}')">${rt.type} ${rt.name}</span>`).join('')}</div>
+    </div>`:''}
+    ${relatedNotes.length>0?`
+    <div class="detail-section">
+      <h4>📋 相关笔记</h4>
+      <div class="detail-row">${relatedNotes.map(rn=>`<span class="detail-chip" style="cursor:pointer" onclick="closeModal('task-detail-modal');openNoteDetail('${rn.id}')">📝 ${rn.title}</span>`).join('')}</div>
+    </div>`:''}
+    <div class="detail-section">
+      <h4>备注</h4>
+      <p style="font-size:0.85rem;color:var(--text-secondary);">${t.remarks||'无'}</p>
+    </div>
+  `;
+  document.getElementById('task-detail-modal').classList.add('open');
+}
+
+function copyTask() { if(currentTaskId){ const t=data.tasks.find(x=>x.id===currentTaskId); if(t){ navigator.clipboard.writeText(JSON.stringify(t,null,2)).then(()=>showToast('已复制到剪贴板')).catch(()=>showToast('复制失败')); } } }
+function toggleStarTask() { if(currentTaskId){ const t=data.tasks.find(x=>x.id===currentTaskId); if(t){ t.starred=!t.starred; saveData(); renderTasks(); openTaskDetail(currentTaskId); showToast(t.starred?'已设为星标':'已取消星标'); } } }
+function shareTask() { showToast('分享功能即将上线'); }
+function editTaskFromDetail() { if(currentTaskId){ closeModal('task-detail-modal'); openTaskForm(currentTaskId); } }
+function deleteTaskFromDetail() { if(currentTaskId){ if(confirm('确定删除该任务吗？')){ deleteTask(currentTaskId); closeModal('task-detail-modal'); currentTaskId=null; } } }
+
+// ============ NOTE DETAIL MODAL ============
+function openNoteDetail(id) {
+  const n = data.notes.find(x=>x.id===id); if(!n) return;
+  currentNoteId = id;
+  document.getElementById('note-detail-title').textContent = n.category+' '+n.title+(n.starred?' ⭐':'');
+  const body = document.getElementById('note-detail-body');
+  const relatedTasks = (n.relatedTasks||[]).map(rid=>data.tasks.find(x=>x.id===rid)).filter(Boolean);
+  const relatedNotes = (n.relatedNotes||[]).map(rid=>data.notes.find(x=>x.id===rid)).filter(Boolean);
+  body.innerHTML = `
+    <div class="detail-section">
+      <h4>笔记内容</h4>
+      <p style="font-size:0.9rem;line-height:1.7;white-space:pre-wrap;">${n.content||'无内容'}</p>
+    </div>
+    ${(n.attachments||[]).length>0?`
+    <div class="detail-section">
+      <h4>📎 附件</h4>
+      <div class="detail-row">${(n.attachments||[]).map(a=>`<span class="detail-chip">📋 ${a}</span>`).join('')}</div>
+    </div>`:''}
+    ${(n.tags||[]).length>0?`
+    <div class="detail-section">
+      <h4>标签</h4>
+      <div>${(n.tags||[]).map(tg=>`<span class="tag">${tg}</span>`).join(' ')}</div>
+    </div>`:''}
+    ${relatedTasks.length>0?`
+    <div class="detail-section">
+      <h4>🔗 相关任务</h4>
+      <div class="detail-row">${relatedTasks.map(rt=>`<span class="detail-chip" style="cursor:pointer" onclick="closeModal('note-detail-modal');openTaskDetail('${rt.id}')">${rt.type} ${rt.name}</span>`).join('')}</div>
+    </div>`:''}
+    ${relatedNotes.length>0?`
+    <div class="detail-section">
+      <h4>📋 相关笔记</h4>
+      <div class="detail-row">${relatedNotes.map(rn=>`<span class="detail-chip" style="cursor:pointer" onclick="closeModal('note-detail-modal');openNoteDetail('${rn.id}')">📝 ${rn.title}</span>`).join('')}</div>
+    </div>`:''}
+    ${(n.remarks||[]).length>0?`
+    <div class="detail-section">
+      <h4>备注事项</h4>
+      <div>${(n.remarks||[]).map(r=>`<span class="detail-chip">🔔 ${r}</span>`).join('')}</div>
+    </div>`:''}
+    <div class="detail-section">
+      <h4>创建时间</h4>
+      <p style="font-size:0.85rem;color:var(--text-secondary);">${n.createdAt||'未知'}</p>
+    </div>
+  `;
+  document.getElementById('note-detail-modal').classList.add('open');
+}
+
+function copyNote() { if(currentNoteId){ const n=data.notes.find(x=>x.id===currentNoteId); if(n){ navigator.clipboard.writeText(JSON.stringify(n,null,2)).then(()=>showToast('已复制到剪贴板')).catch(()=>showToast('复制失败')); } } }
+function toggleStarNote() { if(currentNoteId){ const n=data.notes.find(x=>x.id===currentNoteId); if(n){ n.starred=!n.starred; saveData(); renderNotes(); openNoteDetail(currentNoteId); showToast(n.starred?'已设为星标':'已取消星标'); } } }
+function shareNote() { showToast('分享功能即将上线'); }
+function editNoteFromDetail() { if(currentNoteId){ closeModal('note-detail-modal'); openNoteForm(currentNoteId); } }
+function deleteNoteFromDetail() { if(currentNoteId){ if(confirm('确定删除该笔记吗？')){ deleteNote(currentNoteId); closeModal('note-detail-modal'); currentNoteId=null; } } }
+
+// ============ MODAL ============
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', function(e) { if (e.target === this) closeModal(this.id); });
+});
+
+// ============ STATS ============
+function updateStats() {
+  const tasks = data.tasks; const notes = data.notes;
+  const totalTasks = tasks.length;
+  const doneTasks = tasks.filter(t=>t.status==='done').length;
+  const urgentTasks = tasks.filter(t=>t.status==='urgent').length;
+  const importantTasks = tasks.filter(t=>t.status==='important').length;
+  const overdueTasks = tasks.filter(t=>t.status!=='done'&&t.dueDate&&isOverdue(t.dueDate)).length;
+  const totalNotes = notes.length;
+  const starredTasks = tasks.filter(t=>t.starred).length;
+  const starredNotes = notes.filter(n=>n.starred).length;
+
+  document.getElementById('stats-cards').innerHTML = `
+    <div class="stat-card"><div class="stat-num">${totalTasks}</div><div class="stat-label">总任务数</div></div>
+    <div class="stat-card success"><div class="stat-num">${doneTasks}</div><div class="stat-label">已完成</div></div>
+    <div class="stat-card danger"><div class="stat-num">${urgentTasks}</div><div class="stat-label">🔴 紧急</div></div>
+    <div class="stat-card warning"><div class="stat-num">${importantTasks}</div><div class="stat-label">🟠 重要</div></div>
+    <div class="stat-card danger"><div class="stat-num">${overdueTasks}</div><div class="stat-label">已过期</div></div>
+    <div class="stat-card"><div class="stat-num">${totalNotes}</div><div class="stat-label">总笔记数</div></div>
+    <div class="stat-card"><div class="stat-num">${starredTasks}</div><div class="stat-label">⭐ 星标任务</div></div>
+    <div class="stat-card"><div class="stat-num">${starredNotes}</div><div class="stat-label">⭐ 星标笔记</div></div>
+  `;
+
+  // Priority chart
+  const pCounts = {P0:0,P1:0,P2:0,P3:0}; tasks.forEach(t=>{if(pCounts[t.priority]!==undefined)pCounts[t.priority]++;});
+  const pMax = Math.max(1,...Object.values(pCounts));
+  document.getElementById('priority-chart').innerHTML = Object.entries(pCounts).map(([p,c])=>`
+    <div class="chart-bar-item">
+      <span class="chart-bar-label">${p}</span><span class="chart-bar-track"><div class="chart-bar-fill" style="width:${(c/pMax*100)}%;background:${p==='P0'?'var(--p0)':p==='P1'?'var(--p1)':p==='P2'?'var(--p2)':'var(--p3)'}"></div></span><span style="font-size:0.8rem;width:30px">${c}</span>
+    </div>`).join('');
+
+  // Status chart
+  const sCounts = {urgent:urgentTasks,important:importantTasks,done:doneTasks};
+  const sMax = Math.max(1,...Object.values(sCounts));
+  document.getElementById('status-chart').innerHTML = [
+    {k:'🔴 紧急',v:sCounts.urgent,c:'var(--danger)'},
+    {k:'🟠 重要',v:sCounts.important,c:'var(--warning)'},
+    {k:'🟢 已完成',v:sCounts.done,c:'var(--success)'}
+  ].map(({k,v,c})=>`<div class="chart-bar-item"><span class="chart-bar-label">${k}</span><span class="chart-bar-track"><div class="chart-bar-fill" style="width:${(v/sMax*100)}%;background:${c}"></div></span><span style="font-size:0.8rem;width:30px">${v}</span></div>`).join('');
+}
+
+// ============ TAB SWITCHING ============
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab-nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+tabName).classList.add('active');
+  document.querySelector(`.tab-nav button[data-tab="${tabName}"]`).classList.add('active');
+  if (tabName === 'tasks') renderTasks();
+  if (tabName === 'notes') renderNotes();
+  if (tabName === 'stats') updateStats();
+}
+
+document.querySelectorAll('.tab-nav button').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// ============ SORT CLICK ============
+document.getElementById('task-table').querySelector('thead').addEventListener('click', function(e) {
+  const th = e.target.closest('th.sortable');
+  if (th) sortTasks(th.dataset.sort);
+});
+
+// ============ SETTINGS ============
+function saveSettings() {
+  localStorage.setItem('todo_app_settings', JSON.stringify({
+    defaultTab: document.getElementById('setting-default-tab').value
+  }));
+}
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem('todo_app_settings'));
+    if (s && s.defaultTab) document.getElementById('setting-default-tab').value = s.defaultTab;
+    return s;
+  } catch(e) { return null; }
+}
+function clearAllData() {
+  if (!confirm('确定要清除所有数据吗？此操作不可恢复！')) return;
+  localStorage.removeItem(STORE_KEY);
+  data = { tasks: [], notes: [], nextTaskId: 1, nextNoteId: 1 };
+  saveData(); seedIfEmpty(); renderTasks(); renderNotes(); updateStats();
+  showToast('数据已清除并重置');
+}
+
+// ============ INIT ============
+document.addEventListener('DOMContentLoaded', () => {
+  loadData(); seedIfEmpty();
+  renderTaskFilterBar(); renderTasks(); renderNotes(); updateStats();
+  const settings = loadSettings();
+  if (settings && settings.defaultTab && settings.defaultTab !== 'tasks') {
+    switchTab(settings.defaultTab);
+  }
+});
+
+// Keyboard shortcut
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+  }
+});
+</script>
+</body>
+</html>

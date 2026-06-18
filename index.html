@@ -727,7 +727,23 @@ body {
 // ==================== SUPABASE INIT ====================
 const SUPABASE_URL = 'https://uyfltgtpttivdgzwfmbw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_VuQomluV0Wdj-iQnOs7kGA_-hZ2J2E8';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let supabase = null;
+let supabaseReady = false;
+(function initSupabase() {
+  if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+    try {
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      supabaseReady = true;
+      console.log('Supabase 已就绪');
+    } catch(e) {
+      console.warn('Supabase 初始化失败:', e.message);
+    }
+  } else {
+    console.warn('Supabase SDK 未加载，将使用离线模式');
+  }
+  // 无论 Supabase 是否就绪，都继续初始化
+  _continueInit();
+})();
 
 // ==================== AUTH ====================
 let authMode = 'login';
@@ -754,6 +770,11 @@ async function handleLogin() {
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errorEl = document.getElementById('loginError');
+
+  if (!supabaseReady) {
+    errorEl.textContent = '服务器连接失败，请先使用"访客体验"模式';
+    errorEl.style.display = 'block'; return;
+  }
 
   if (!email) {
     errorEl.textContent = '请输入邮箱地址';
@@ -808,7 +829,7 @@ function enterApp() {
 }
 
 async function handleLogout() {
-  await supabase.auth.signOut();
+  if (supabaseReady) { try { await supabase.auth.signOut(); } catch(e) {} }
   currentUser = null;
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('appContainer').style.display = 'none';
@@ -925,7 +946,8 @@ async function loadUserData() {
   }
 
   try {
-    // Load from Supabase in parallel
+    // Load from Supabase in parallel (only if ready)
+    if (!supabaseReady) return;
     const [tasksRes, memosRes, plansRes, pomoRes] = await Promise.all([
       supabase.from('tasks').select('*').eq('user_id', currentUser.id),
       supabase.from('memos').select('*').eq('user_id', currentUser.id),
@@ -2811,33 +2833,43 @@ function closeModal(id) {
 }
 
 // ==================== INIT ====================
-async function init() {
-  // Check Supabase session
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session && session.user) {
-    currentUser = { email: session.user.email, id: session.user.id };
-    document.getElementById('loginOverlay').style.display = 'none';
-    document.getElementById('appContainer').style.display = 'flex';
-    updateSidebarForUser();
-  } else {
-    document.getElementById('loginOverlay').style.display = 'flex';
-    document.getElementById('appContainer').style.display = 'none';
-  }
-
-  // Listen for auth state changes
-  supabase.auth.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_IN' && session) {
-      currentUser = { email: session.user.email, id: session.user.id };
-      document.getElementById('loginOverlay').style.display = 'none';
-      document.getElementById('appContainer').style.display = 'flex';
-      updateSidebarForUser();
-      loadUserData().then(() => { updateBadges(); switchModule('today'); });
-    } else if (event === 'SIGNED_OUT') {
-      currentUser = null;
+async function _continueInit() {
+  if (supabaseReady) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session && session.user) {
+        currentUser = { email: session.user.email, id: session.user.id };
+        document.getElementById('loginOverlay').style.display = 'none';
+        document.getElementById('appContainer').style.display = 'flex';
+        updateSidebarForUser();
+      } else {
+        document.getElementById('loginOverlay').style.display = 'flex';
+        document.getElementById('appContainer').style.display = 'none';
+      }
+      supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          currentUser = { email: session.user.email, id: session.user.id };
+          document.getElementById('loginOverlay').style.display = 'none';
+          document.getElementById('appContainer').style.display = 'flex';
+          updateSidebarForUser();
+          loadUserData().then(() => { updateBadges(); switchModule('today'); });
+        } else if (event === 'SIGNED_OUT') {
+          currentUser = null;
+          document.getElementById('loginOverlay').style.display = 'flex';
+          document.getElementById('appContainer').style.display = 'none';
+        }
+      });
+    } catch(e) {
+      console.warn('Supabase 会话检查失败:', e.message);
+      supabaseReady = false;
       document.getElementById('loginOverlay').style.display = 'flex';
       document.getElementById('appContainer').style.display = 'none';
     }
-  });
+  } else {
+    // Supabase 不可用，显示登录页
+    document.getElementById('loginOverlay').style.display = 'flex';
+    document.getElementById('appContainer').style.display = 'none';
+  }
 
   // Request notification permission
   if ('Notification' in window && Notification.permission === 'default') {
@@ -2855,8 +2887,6 @@ async function init() {
     switchModule('today');
   }
 }
-
-init();
 </script>
 </body>
 </html>

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Todo 工作台</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
@@ -617,16 +618,16 @@ body {
     <p class="login-subtitle">个人任务管理 · 高效工作</p>
     <div class="login-form" id="loginForm">
       <div class="form-group">
-        <label>用户名</label>
-        <input type="text" id="loginUsername" placeholder="请输入用户名（3-20字符）" maxlength="20">
+        <label>邮箱</label>
+        <input type="email" id="loginEmail" placeholder="请输入邮箱地址" onkeydown="if(event.key==='Enter')handleLogin()">
       </div>
       <div class="form-group">
         <label>密码</label>
-        <input type="password" id="loginPassword" placeholder="请输入密码（6-20字符）" maxlength="20" onkeydown="if(event.key==='Enter')handleLogin()">
+        <input type="password" id="loginPassword" placeholder="请输入密码（6位以上）" onkeydown="if(event.key==='Enter')handleLogin()">
       </div>
       <div class="form-group" id="confirmPasswordGroup" style="display:none">
         <label>确认密码</label>
-        <input type="password" id="loginConfirmPassword" placeholder="请再次输入密码" maxlength="20" onkeydown="if(event.key==='Enter')handleLogin()">
+        <input type="password" id="loginConfirmPassword" placeholder="请再次输入密码" onkeydown="if(event.key==='Enter')handleLogin()">
       </div>
       <button class="login-btn" id="loginSubmitBtn" onclick="handleLogin()">登 录</button>
       <p class="login-switch">
@@ -690,26 +691,14 @@ body {
 
 <script>
 // ==================== AUTH ====================
-let authMode = 'login';
-let currentUser = null;
+// ==================== SUPABASE INIT ====================
+const SUPABASE_URL = 'https://uyfltgtpttivdgzwfmbw.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_VuQomluV0Wdj-iQnOs7kGA_-hZ2J2E8';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-function loadAuth() {
-  try {
-    const stored = localStorage.getItem('currentUser');
-    if (stored) currentUser = JSON.parse(stored);
-  } catch(e) { currentUser = null; }
-}
-function saveAuth() {
-  if (currentUser) {
-    localStorage.setItem('currentUser', JSON.stringify(currentUser));
-  } else {
-    localStorage.removeItem('currentUser');
-  }
-}
-function getUsers() {
-  try { return JSON.parse(localStorage.getItem('todo_users')) || []; } catch(e) { return []; }
-}
-function saveUsers(users) { localStorage.setItem('todo_users', JSON.stringify(users)); }
+// ==================== AUTH ====================
+let authMode = 'login';
+let currentUser = null; // { email, id }
 
 function toggleLoginMode() {
   if (authMode === 'login') {
@@ -728,64 +717,70 @@ function toggleLoginMode() {
   document.getElementById('loginError').style.display = 'none';
 }
 
-function handleLogin() {
-  const username = document.getElementById('loginUsername').value.trim();
+async function handleLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errorEl = document.getElementById('loginError');
-  
-  if (!username || username.length < 3) {
-    errorEl.textContent = '用户名不能为空，且至少3个字符';
+
+  if (!email) {
+    errorEl.textContent = '请输入邮箱地址';
     errorEl.style.display = 'block'; return;
   }
   if (!password || password.length < 6) {
     errorEl.textContent = '密码不能为空，且至少6个字符';
     errorEl.style.display = 'block'; return;
   }
-  
-  const users = getUsers();
-  
-  if (authMode === 'register') {
-    const confirmPassword = document.getElementById('loginConfirmPassword').value;
-    if (password !== confirmPassword) {
-      errorEl.textContent = '两次输入的密码不一致';
-      errorEl.style.display = 'block'; return;
+
+  try {
+    if (authMode === 'register') {
+      const confirmPassword = document.getElementById('loginConfirmPassword').value;
+      if (password !== confirmPassword) {
+        errorEl.textContent = '两次输入的密码不一致';
+        errorEl.style.display = 'block'; return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email, password,
+        options: { emailRedirectTo: window.location.href }
+      });
+      if (error) throw error;
+      if (data.user && data.session) {
+        // Email auto-confirmed
+        currentUser = { email: data.user.email, id: data.user.id };
+        enterApp();
+      } else {
+        // Email confirmation may be required
+        errorEl.textContent = '注册成功！请检查邮箱并确认验证链接后登录。';
+        errorEl.style.display = 'block';
+      }
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      currentUser = { email: data.user.email, id: data.user.id };
+      enterApp();
     }
-    if (users.find(u => u.username === username)) {
-      errorEl.textContent = '该用户名已被注册';
-      errorEl.style.display = 'block'; return;
-    }
-    users.push({ username, password });
-    saveUsers(users);
-    currentUser = { username };
-    saveAuth();
-    enterApp();
-  } else {
-    const user = users.find(u => u.username === username);
-    if (!user || user.password !== password) {
-      errorEl.textContent = '用户名或密码错误';
-      errorEl.style.display = 'block'; return;
-    }
-    currentUser = { username };
-    saveAuth();
-    enterApp();
+  } catch (err) {
+    errorEl.textContent = authMode === 'register' ? '注册失败：' + err.message : '登录失败：' + err.message;
+    errorEl.style.display = 'block';
   }
 }
 
 function enterApp() {
   document.getElementById('loginOverlay').style.display = 'none';
   document.getElementById('appContainer').style.display = 'flex';
-  document.getElementById('sidebarUser').textContent = currentUser.username;
-  document.getElementById('sidebarAvatar').textContent = currentUser.username.charAt(0).toUpperCase();
-  updateBadges();
-  switchModule('today');
+  document.getElementById('sidebarUser').textContent = currentUser.email;
+  document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+  loadUserData().then(() => {
+    updateBadges();
+    switchModule('today');
+  });
 }
 
-function handleLogout() {
+async function handleLogout() {
+  await supabase.auth.signOut();
   currentUser = null;
-  saveAuth();
   document.getElementById('loginOverlay').style.display = 'flex';
   document.getElementById('appContainer').style.display = 'none';
-  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginEmail').value = '';
   document.getElementById('loginPassword').value = '';
   if (document.getElementById('confirmPasswordGroup').style.display !== 'none') {
     document.getElementById('loginConfirmPassword').value = '';
@@ -794,7 +789,7 @@ function handleLogout() {
   if (authMode === 'register') toggleLoginMode();
 }
 
-// ==================== DATA STORE ====================
+// ==================== DATA STORE (Supabase + localStorage cache) ====================
 const STORE = {
   tasks: [],
   memos: [],
@@ -802,20 +797,120 @@ const STORE = {
   pomodoro: { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' },
 };
 
-function loadStore() {
-  try {
-    const raw = localStorage.getItem('todo_workspace');
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data.tasks) STORE.tasks = data.tasks;
-      if (data.memos) STORE.memos = data.memos;
-      if (data.plans) STORE.plans = data.plans;
-      if (data.pomodoro) STORE.pomodoro = data.pomodoro;
-    }
-  } catch(e) {}
+// localStorage cache key (per user)
+function getCacheKey(table) { return 'todo_' + (currentUser ? currentUser.id : 'guest') + '_' + table; }
+
+function saveLocalCache(table, data) {
+  try { localStorage.setItem(getCacheKey(table), JSON.stringify(data)); } catch(e) {}
 }
+function loadLocalCache(table) {
+  try { const raw = localStorage.getItem(getCacheKey(table)); return raw ? JSON.parse(raw) : null; } catch(e) { return null; }
+}
+
+async function loadUserData() {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    // Load from Supabase in parallel
+    const [tasksRes, memosRes, plansRes, pomoRes] = await Promise.all([
+      supabase.from('tasks').select('*').eq('user_id', currentUser.id),
+      supabase.from('memos').select('*').eq('user_id', currentUser.id),
+      supabase.from('plans').select('*').eq('user_id', currentUser.id),
+      supabase.from('pomodoro').select('*').eq('user_id', currentUser.id).eq('date', getTodayDateStr()).maybeSingle(),
+    ]);
+
+    if (tasksRes.data) {
+      STORE.tasks = tasksRes.data.map(r => ({ ...r, dueDate: r.due_date || '', tags: r.tags || [], relatedTasks: r.related_tasks || [], attachments: r.attachments || [], remark: r.remark || '' }));
+      saveLocalCache('tasks', STORE.tasks);
+    } else { STORE.tasks = loadLocalCache('tasks') || []; }
+
+    if (memosRes.data) {
+      STORE.memos = memosRes.data.map(r => ({ ...r, createdAt: r.created_at, updatedAt: r.updated_at }));
+      saveLocalCache('memos', STORE.memos);
+    } else { STORE.memos = loadLocalCache('memos') || []; }
+
+    if (plansRes.data) {
+      STORE.plans = plansRes.data.map(r => ({ id: r.id, name: r.plan_name, createdAt: r.created_at, tasks: r.tasks_json || [], totalDays: r.total_days || 0 }));
+      saveLocalCache('plans', STORE.plans);
+    } else { STORE.plans = loadLocalCache('plans') || []; }
+
+    if (pomoRes.data) {
+      STORE.pomodoro = { workMinutes: pomoRes.data.work_minutes || 25, breakMinutes: pomoRes.data.break_minutes || 5, todayCount: pomoRes.data.today_count || 0, todayDate: pomoRes.data.date || '' };
+      saveLocalCache('pomodoro', STORE.pomodoro);
+    } else { STORE.pomodoro = loadLocalCache('pomodoro') || { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' }; }
+  } catch (e) {
+    // Fallback to localStorage cache
+    STORE.tasks = loadLocalCache('tasks') || [];
+    STORE.memos = loadLocalCache('memos') || [];
+    STORE.plans = loadLocalCache('plans') || [];
+    STORE.pomodoro = loadLocalCache('pomodoro') || { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
+  }
+}
+
 function saveStore() {
-  localStorage.setItem('todo_workspace', JSON.stringify(STORE));
+  // Write to localStorage cache (fire-and-forget Supabase sync via dedicated helpers)
+  saveLocalCache('tasks', STORE.tasks);
+  saveLocalCache('memos', STORE.memos);
+  saveLocalCache('plans', STORE.plans);
+  saveLocalCache('pomodoro', STORE.pomodoro);
+}
+
+// ==================== SUPABASE SYNC HELPERS ====================
+async function syncTaskToCloud(task) {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    await supabase.from('tasks').upsert({
+      id: task.id, user_id: currentUser.id, name: task.name, type: task.type,
+      priority: task.priority, status: task.status, due_date: task.dueDate || null,
+      remark: task.remark || '', created_at: task.createdAt, done_at: task.status === 'done' ? new Date().toISOString() : null,
+      tags: task.tags || [], related_tasks: task.relatedTasks || [], attachments: task.attachments || []
+    }, { onConflict: 'id' });
+  } catch(e) { console.warn('syncTaskToCloud failed:', e); }
+}
+
+async function deleteTaskFromCloud(id) {
+  if (!currentUser || !currentUser.id) return;
+  try { await supabase.from('tasks').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteTaskFromCloud failed:', e); }
+}
+
+async function syncMemoToCloud(memo) {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    await supabase.from('memos').upsert({
+      id: memo.id, user_id: currentUser.id, title: memo.title, content: memo.content || '',
+      tags: memo.tags || [], created_at: memo.createdAt, updated_at: memo.updatedAt || new Date().toISOString()
+    }, { onConflict: 'id' });
+  } catch(e) { console.warn('syncMemoToCloud failed:', e); }
+}
+
+async function deleteMemoFromCloud(id) {
+  if (!currentUser || !currentUser.id) return;
+  try { await supabase.from('memos').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteMemoFromCloud failed:', e); }
+}
+
+async function syncPlanToCloud(plan) {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    await supabase.from('plans').upsert({
+      id: plan.id, user_id: currentUser.id, plan_name: plan.name,
+      tasks_json: plan.tasks || [], created_at: plan.createdAt, total_days: plan.totalDays || 0
+    }, { onConflict: 'id' });
+  } catch(e) { console.warn('syncPlanToCloud failed:', e); }
+}
+
+async function deletePlanFromCloud(id) {
+  if (!currentUser || !currentUser.id) return;
+  try { await supabase.from('plans').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deletePlanFromCloud failed:', e); }
+}
+
+async function syncPomodoroToCloud() {
+  if (!currentUser || !currentUser.id) return;
+  try {
+    await supabase.from('pomodoro').upsert({
+      user_id: currentUser.id, today_count: STORE.pomodoro.todayCount,
+      work_minutes: STORE.pomodoro.workMinutes, break_minutes: STORE.pomodoro.breakMinutes,
+      date: getTodayDateStr()
+    }, { onConflict: 'user_id,date' });
+  } catch(e) { console.warn('syncPomodoroToCloud failed:', e); }
 }
 
 function genId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
@@ -1093,6 +1188,9 @@ function saveTask() {
     STORE.tasks.push({ id: genId(), ...taskData, createdAt: new Date().toISOString(), relatedTasks: [], attachments: [] });
   }
   saveStore();
+  // Sync to Supabase
+  const savedTask = editingTaskId ? STORE.tasks.find(t => t.id === editingTaskId) : STORE.tasks[STORE.tasks.length - 1];
+  if (savedTask) syncTaskToCloud(savedTask);
   closeModal('taskModalOverlay');
   renderTasks();
   updateBadges();
@@ -1102,6 +1200,7 @@ function deleteTask(id) {
   if (!confirm('确定删除此任务吗？')) return;
   STORE.tasks = STORE.tasks.filter(t => t.id !== id);
   saveStore();
+  deleteTaskFromCloud(id);
   renderTasks();
   updateBadges();
 }
@@ -1153,6 +1252,7 @@ function openTaskDetail(id) {
   $('#detailRemark').addEventListener('change', function() {
     task.remark = this.value;
     saveStore();
+    syncTaskToCloud(task);
   });
 }
 
@@ -1162,6 +1262,7 @@ function copyTask(id) {
   const newTask = { ...task, id: genId(), name: task.name + ' (副本)', createdAt: new Date().toISOString() };
   STORE.tasks.push(newTask);
   saveStore();
+  syncTaskToCloud(newTask);
   closeModal('detailModalOverlay');
   renderTasks();
   updateBadges();
@@ -1173,6 +1274,7 @@ function deleteTaskFromDetail(id) {
   if (!confirm('确定删除此任务吗？')) return;
   STORE.tasks = STORE.tasks.filter(t => t.id !== id);
   saveStore();
+  deleteTaskFromCloud(id);
   closeModal('detailModalOverlay');
   renderTasks();
   updateBadges();
@@ -1263,6 +1365,8 @@ function saveMemo() {
     STORE.memos.push({ id: genId(), ...memoData, createdAt: new Date().toISOString(), attachments: [], relatedTasks: [], remark: '' });
   }
   saveStore();
+  const savedMemo = editingMemoId ? STORE.memos.find(m => m.id === editingMemoId) : STORE.memos[STORE.memos.length - 1];
+  if (savedMemo) syncMemoToCloud(savedMemo);
   closeModal('memoModalOverlay');
   renderMemos();
   updateBadges();
@@ -1272,6 +1376,7 @@ function deleteMemo(id) {
   if (!confirm('确定删除此备忘录吗？')) return;
   STORE.memos = STORE.memos.filter(m => m.id !== id);
   saveStore();
+  deleteMemoFromCloud(id);
   renderMemos();
   updateBadges();
 }
@@ -1312,6 +1417,7 @@ function openMemoDetail(id) {
   $('#detailMemoRemark').addEventListener('change', function() {
     memo.remark = this.value;
     saveStore();
+    syncMemoToCloud(memo);
   });
 }
 
@@ -1325,6 +1431,7 @@ function deleteMemoFromDetail(id) {
   if (!confirm('确定删除此备忘录吗？')) return;
   STORE.memos = STORE.memos.filter(m => m.id !== id);
   saveStore();
+  deleteMemoFromCloud(id);
   closeModal('detailMemoOverlay');
   renderMemos();
   updateBadges();
@@ -1353,6 +1460,7 @@ function renderPomodoro() {
     STORE.pomodoro.todayCount = 0;
     STORE.pomodoro.todayDate = today;
     saveStore();
+    syncPomodoroToCloud();
   }
 
   const html = `
@@ -1382,6 +1490,7 @@ function updatePomodoroSettings() {
   STORE.pomodoro.workMinutes = Math.max(1, Math.min(120, wm));
   STORE.pomodoro.breakMinutes = Math.max(1, Math.min(60, bm));
   saveStore();
+  syncPomodoroToCloud();
   if (!pomodoroRunning) {
     pomodoroTimeLeft = pomodoroPhase === 'work' ? STORE.pomodoro.workMinutes * 60 : STORE.pomodoro.breakMinutes * 60;
     renderPomodoro();
@@ -1410,6 +1519,7 @@ function togglePomodoro() {
         if (pomodoroPhase === 'work') {
           STORE.pomodoro.todayCount++;
           saveStore();
+          syncPomodoroToCloud();
           pomodoroPhase = 'break';
         } else {
           pomodoroPhase = 'work';
@@ -2151,6 +2261,14 @@ function batchAddPlanTasks(msgIndex) {
   });
 
   saveStore();
+  // Sync added tasks to cloud
+  checkboxes.forEach(cb => {
+    const ti = parseInt(cb.dataset.taskIndex);
+    const taskData = msg.planTasks[ti];
+    if (!taskData) return;
+    const savedTask = STORE.tasks.find(t => t.name === taskData.name && t.dueDate === (taskData.dueDate || ''));
+    if (savedTask) syncTaskToCloud(savedTask);
+  });
   updateBadges();
 
   // Mark the plan as confirmed with only the selected tasks
@@ -2165,13 +2283,17 @@ function batchAddPlanTasks(msgIndex) {
   // Create plan record in STORE.plans
   const planName = (msg.planQuery || 'AI 计划').replace(/^(请|帮我|帮我制定|请帮我|制定|生成|创建)/, '').trim().slice(0, 30) || 'AI 计划';
   const planDays = [...new Set(selectedTasks.map(t => t.day || 1))];
-  STORE.plans.push({
+  const newPlan = {
     id: genId(),
     name: planName,
     createdAt: new Date().toISOString(),
     tasks: selectedTasks,
     totalDays: planDays.length,
-  });
+  };
+  STORE.plans.push(newPlan);
+
+  // Sync new plan to cloud
+  syncPlanToCloud(newPlan);
 
   // Append a small system note
   aiMessages.push({
@@ -2272,6 +2394,7 @@ function deletePlan(planId) {
   if (!confirm('确定删除这个计划吗？任务列表中的对应任务不会受到影响。')) return;
   STORE.plans = STORE.plans.filter(p => p.id !== planId);
   saveStore();
+  deletePlanFromCloud(planId);
   renderPlans();
 }
 
@@ -2395,7 +2518,7 @@ function toggleTodayTask(cb) {
 
   if (sourceModule === 'tasks') {
     const task = STORE.tasks.find(t => t.id === sourceId);
-    if (task) { task.status = checked ? 'done' : 'important'; saveStore(); }
+    if (task) { task.status = checked ? 'done' : 'important'; saveStore(); syncTaskToCloud(task); }
   } else if (sourceModule === 'plans') {
     STORE.plans.forEach(plan => {
       plan.tasks.forEach(t => {
@@ -2405,6 +2528,8 @@ function toggleTodayTask(cb) {
       });
     });
     saveStore();
+    // Sync updated plans
+    STORE.plans.forEach(plan => syncPlanToCloud(plan));
   }
   updateBadges();
   renderToday();
@@ -2456,6 +2581,7 @@ function batchMarkDone() {
   if (ids.length === 0) return;
   STORE.tasks.forEach(t => { if (ids.includes(t.id)) t.status = 'done'; });
   saveStore();
+  ids.forEach(id => { const t = STORE.tasks.find(x => x.id === id); if (t) syncTaskToCloud(t); });
   renderTasks();
 }
 
@@ -2465,6 +2591,7 @@ function batchDeleteTasks() {
   if (!confirm(`确定删除选中的 ${ids.length} 个任务吗？`)) return;
   STORE.tasks = STORE.tasks.filter(t => !ids.includes(t.id));
   saveStore();
+  ids.forEach(id => deleteTaskFromCloud(id));
   updateBadges();
   renderTasks();
 }
@@ -2477,6 +2604,7 @@ function batchChangePriority() {
   if (ids.length === 0) return;
   STORE.tasks.forEach(t => { if (ids.includes(t.id)) t.priority = priority; });
   saveStore();
+  ids.forEach(id => { const t = STORE.tasks.find(x => x.id === id); if (t) syncTaskToCloud(t); });
   sel.value = '';
   renderTasks();
 }
@@ -2488,17 +2616,35 @@ function closeModal(id) {
 }
 
 // ==================== INIT ====================
-function init() {
-  loadAuth();
-  if (currentUser) {
+async function init() {
+  // Check Supabase session
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session && session.user) {
+    currentUser = { email: session.user.email, id: session.user.id };
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('appContainer').style.display = 'flex';
-    document.getElementById('sidebarUser').textContent = currentUser.username;
-    document.getElementById('sidebarAvatar').textContent = currentUser.username.charAt(0).toUpperCase();
+    document.getElementById('sidebarUser').textContent = currentUser.email;
+    document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
     document.getElementById('appContainer').style.display = 'none';
   }
+
+  // Listen for auth state changes
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_IN' && session) {
+      currentUser = { email: session.user.email, id: session.user.id };
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('appContainer').style.display = 'flex';
+      document.getElementById('sidebarUser').textContent = currentUser.email;
+      document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+      loadUserData().then(() => { updateBadges(); switchModule('today'); });
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      document.getElementById('loginOverlay').style.display = 'flex';
+      document.getElementById('appContainer').style.display = 'none';
+    }
+  });
 
   // Request notification permission
   if ('Notification' in window && Notification.permission === 'default') {
@@ -2510,8 +2656,11 @@ function init() {
     item.addEventListener('click', () => switchModule(item.dataset.module));
   });
 
-  updateBadges();
-  if (currentUser) switchModule('today');
+  if (currentUser) {
+    await loadUserData();
+    updateBadges();
+    switchModule('today');
+  }
 }
 
 init();

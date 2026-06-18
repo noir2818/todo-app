@@ -591,6 +591,37 @@ body {
 .login-switch a:hover { text-decoration: underline; }
 .login-error { margin-top: 14px; padding: 10px 14px; background: #ffebee; color: var(--danger); border-radius: 8px; font-size: 13px; }
 
+/* Guest Mode */
+.guest-btn {
+  width: 100%; padding: 12px; background: transparent; color: var(--primary);
+  border: 2px solid var(--primary); border-radius: 8px; font-size: 16px;
+  font-weight: 600; cursor: pointer; transition: var(--transition); margin-top: 12px;
+}
+.guest-btn:hover { background: rgba(66,165,245,0.08); }
+.login-separator { margin: 14px 0 4px; font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 12px; }
+.login-separator::before, .login-separator::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.sidebar-user .guest-login-btn {
+  background: var(--primary); color: #fff; border: none;
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: var(--transition);
+}
+.sidebar-user .guest-login-btn:hover { background: var(--primary-dark); }
+.ai-remaining { font-size: 12px; color: var(--text-secondary); padding: 4px 10px; border-radius: 10px; background: #f0f0f0; white-space: nowrap; }
+.ai-remaining.used { color: var(--danger); background: #fff0f0; }
+.guest-tip-banner {
+  background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: #f57f17;
+}
+.guest-register-card {
+  background: linear-gradient(135deg, #e3f2fd, #bbdefb); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 12px; text-align: center;
+}
+.guest-register-card h4 { margin: 0 0 6px; font-size: 15px; color: var(--primary-dark); }
+.guest-register-card p { margin: 0 0 10px; font-size: 13px; color: var(--text-secondary); }
+.guest-register-card .register-cta-btn {
+  display: inline-block; padding: 8px 24px; background: var(--primary); color: #fff;
+  border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+
 /* Sidebar User */
 .sidebar-user {
   padding: 0 20px 14px; border-bottom: 1px solid var(--border); margin-bottom: 8px;
@@ -634,6 +665,8 @@ body {
         <span id="loginSwitchText">还没有账号？</span>
         <a href="javascript:void(0)" id="loginSwitchLink" onclick="toggleLoginMode()">立即注册</a>
       </p>
+      <div class="login-separator">或</div>
+      <button class="guest-btn" onclick="enterAsGuest()">访客体验</button>
       <p class="login-error" id="loginError" style="display:none"></p>
     </div>
   </div>
@@ -648,7 +681,7 @@ body {
   <div class="sidebar-user">
     <div class="user-avatar" id="sidebarAvatar">👤</div>
     <span class="user-name" id="sidebarUser"></span>
-    <button class="logout-btn" onclick="handleLogout()">退出</button>
+    <button class="logout-btn" id="sidebarLogoutBtn" onclick="handleLogout()">退出</button>
   </div>
   <nav>
     <div class="nav-item active" data-module="today">
@@ -767,8 +800,7 @@ async function handleLogin() {
 function enterApp() {
   document.getElementById('loginOverlay').style.display = 'none';
   document.getElementById('appContainer').style.display = 'flex';
-  document.getElementById('sidebarUser').textContent = currentUser.email;
-  document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+  updateSidebarForUser();
   loadUserData().then(() => {
     updateBadges();
     switchModule('today');
@@ -787,6 +819,75 @@ async function handleLogout() {
   }
   document.getElementById('loginError').style.display = 'none';
   if (authMode === 'register') toggleLoginMode();
+}
+
+// ==================== GUEST MODE ====================
+function getGuestWorkspace() {
+  if (!currentUser || currentUser.role !== 'guest') return null;
+  try {
+    const raw = localStorage.getItem('guest_workspace_' + currentUser.id);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function saveGuestWorkspace() {
+  if (!currentUser || currentUser.role !== 'guest') return;
+  const ws = {
+    tasks: STORE.tasks, memos: STORE.memos, plans: STORE.plans,
+    pomodoro: STORE.pomodoro, aiCallsRemaining: currentUser._aiCallsRemaining ?? 1,
+  };
+  try { localStorage.setItem('guest_workspace_' + currentUser.id, JSON.stringify(ws)); } catch(e) {}
+}
+
+function enterAsGuest() {
+  const guestId = 'guest_' + Date.now();
+  currentUser = { id: guestId, role: 'guest', _aiCallsRemaining: 1 };
+  document.getElementById('loginOverlay').style.display = 'none';
+  document.getElementById('appContainer').style.display = 'flex';
+  updateSidebarForGuest();
+  STORE.tasks = [];
+  STORE.memos = [];
+  STORE.plans = [];
+  STORE.pomodoro = { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
+  saveGuestWorkspace();
+  updateBadges();
+  switchModule('today');
+}
+
+function updateSidebarForGuest() {
+  document.getElementById('sidebarUser').textContent = '访客';
+  document.getElementById('sidebarAvatar').textContent = '👤';
+  const btn = document.getElementById('sidebarLogoutBtn');
+  btn.textContent = '注册/登录';
+  btn.className = 'guest-login-btn';
+  btn.onclick = handleGuestLogout;
+}
+
+function updateSidebarForUser() {
+  if (!currentUser || currentUser.role === 'guest') return;
+  document.getElementById('sidebarUser').textContent = currentUser.email;
+  document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+  const btn = document.getElementById('sidebarLogoutBtn');
+  btn.textContent = '退出';
+  btn.className = 'logout-btn';
+  btn.onclick = handleLogout;
+}
+
+function handleGuestLogout() {
+  if (confirm('访客数据仅保存在本地，关闭后无法恢复。确定退出吗？')) {
+    if (currentUser && currentUser.id) {
+      localStorage.removeItem('guest_workspace_' + currentUser.id);
+    }
+    currentUser = null;
+    STORE.tasks = [];
+    STORE.memos = [];
+    STORE.plans = [];
+    STORE.pomodoro = { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
+    document.getElementById('loginOverlay').style.display = 'flex';
+    document.getElementById('appContainer').style.display = 'none';
+    document.getElementById('loginEmail').value = '';
+    document.getElementById('loginPassword').value = '';
+  }
 }
 
 // ==================== DATA STORE (Supabase + localStorage cache) ====================
@@ -809,6 +910,20 @@ function loadLocalCache(table) {
 
 async function loadUserData() {
   if (!currentUser || !currentUser.id) return;
+
+  // Guest mode: load from guest workspace only
+  if (currentUser.role === 'guest') {
+    const ws = getGuestWorkspace();
+    if (ws) {
+      STORE.tasks = ws.tasks || [];
+      STORE.memos = ws.memos || [];
+      STORE.plans = ws.plans || [];
+      STORE.pomodoro = ws.pomodoro || { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
+      currentUser._aiCallsRemaining = ws.aiCallsRemaining ?? 1;
+    }
+    return;
+  }
+
   try {
     // Load from Supabase in parallel
     const [tasksRes, memosRes, plansRes, pomoRes] = await Promise.all([
@@ -847,6 +962,11 @@ async function loadUserData() {
 }
 
 function saveStore() {
+  // Guest mode: save to guest workspace localStorage only
+  if (currentUser && currentUser.role === 'guest') {
+    saveGuestWorkspace();
+    return;
+  }
   // Write to localStorage cache (fire-and-forget Supabase sync via dedicated helpers)
   saveLocalCache('tasks', STORE.tasks);
   saveLocalCache('memos', STORE.memos);
@@ -856,7 +976,7 @@ function saveStore() {
 
 // ==================== SUPABASE SYNC HELPERS ====================
 async function syncTaskToCloud(task) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try {
     await supabase.from('tasks').upsert({
       id: task.id, user_id: currentUser.id, name: task.name, type: task.type,
@@ -868,12 +988,12 @@ async function syncTaskToCloud(task) {
 }
 
 async function deleteTaskFromCloud(id) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try { await supabase.from('tasks').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteTaskFromCloud failed:', e); }
 }
 
 async function syncMemoToCloud(memo) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try {
     await supabase.from('memos').upsert({
       id: memo.id, user_id: currentUser.id, title: memo.title, content: memo.content || '',
@@ -883,12 +1003,12 @@ async function syncMemoToCloud(memo) {
 }
 
 async function deleteMemoFromCloud(id) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try { await supabase.from('memos').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteMemoFromCloud failed:', e); }
 }
 
 async function syncPlanToCloud(plan) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try {
     await supabase.from('plans').upsert({
       id: plan.id, user_id: currentUser.id, plan_name: plan.name,
@@ -898,12 +1018,12 @@ async function syncPlanToCloud(plan) {
 }
 
 async function deletePlanFromCloud(id) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try { await supabase.from('plans').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deletePlanFromCloud failed:', e); }
 }
 
 async function syncPomodoroToCloud() {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
   try {
     await supabase.from('pomodoro').upsert({
       user_id: currentUser.id, today_count: STORE.pomodoro.todayCount,
@@ -1796,11 +1916,25 @@ function addTaskFromAI(idx, btn) {
 function renderAi() {
   if (aiMessages.length === 0) initAiMessages();
 
+  const isGuest = currentUser && currentUser.role === 'guest';
+  const remaining = isGuest ? (currentUser._aiCallsRemaining ?? 0) : -1;
+  const aiExhausted = isGuest && remaining <= 0;
+
   let html = '<div class="ai-layout">';
 
   // Chat area
   html += '<div class="ai-chat">';
   html += '<div class="ai-chat-header"><div class="ai-avatar">🤖</div><div class="info"><h3>AI 智能助手</h3><p>DeepSeek · 基于任务数据提供智能建议</p></div></div>';
+
+  // Guest tip: first time before any user message
+  if (isGuest && remaining > 0 && aiMessages.length <= 1 && aiMessages[0]?.role === 'ai') {
+    html += '<div class="guest-tip-banner">🎁 作为访客，您可免费体验一次 AI 助手，注册后无限使用哦～</div>';
+  }
+
+  // Guest exhausted: register prompt
+  if (aiExhausted) {
+    html += '<div class="guest-register-card"><h4>🎉 体验次数已用完</h4><p>注册账号即可无限使用 AI 助手，同步数据到云端，随时随地访问。</p><button class="register-cta-btn" onclick="handleGuestLogout()">立即注册 / 登录</button></div>';
+  }
   html += '<div class="ai-messages" id="aiMessages">';
 
   aiMessages.forEach((msg, idx) => {
@@ -1844,13 +1978,19 @@ function renderAi() {
   }
 
   html += '</div>';
-  html += `<div class="ai-input-bar">
-    <input type="text" id="aiInput" placeholder="${aiLoading ? 'AI 正在思考中...' : '输入消息，按 Enter 发送...'}" onkeydown="if(event.key==='Enter' && !aiLoading)sendAiMessage()" ${aiLoading ? 'disabled' : ''}>
-    ${aiLoading
-      ? `<button class="ai-stop-btn" onclick="stopAiGeneration()" title="停止生成">⏹</button>`
-      : `<button class="ai-send-btn" onclick="sendAiMessage()">➤</button>`
-    }
-  </div>`;
+  if (aiExhausted) {
+    html += `<div class="ai-input-bar"><input type="text" disabled placeholder="访客仅可免费体验一次 AI 对话，注册后无限使用"></div>`;
+  } else {
+    const guestRemainingHtml = isGuest ? `<span class="ai-remaining${remaining <= 0 ? ' used' : ''}">剩余 ${remaining}/1 次</span>` : '';
+    html += `<div class="ai-input-bar">
+      <input type="text" id="aiInput" placeholder="${aiLoading ? 'AI 正在思考中...' : '输入消息，按 Enter 发送...'}" onkeydown="if(event.key==='Enter' && !aiLoading)sendAiMessage()" ${aiLoading ? 'disabled' : ''}>
+      ${guestRemainingHtml}
+      ${aiLoading
+        ? `<button class="ai-stop-btn" onclick="stopAiGeneration()" title="停止生成">⏹</button>`
+        : `<button class="ai-send-btn" onclick="sendAiMessage()">➤</button>`
+      }
+    </div>`;
+  }
   html += '</div>';
 
   // Capabilities panel
@@ -1874,6 +2014,15 @@ function renderAi() {
 
 async function sendAiMessage() {
   if (aiLoading) return;
+
+  // Guest limit check
+  if (currentUser && currentUser.role === 'guest') {
+    if ((currentUser._aiCallsRemaining ?? 0) <= 0) {
+      renderAi();
+      return;
+    }
+  }
+
   const input = $('#aiInput');
   if (!input) return;
   const text = input.value.trim();
@@ -1889,6 +2038,11 @@ async function sendAiMessage() {
     const reply = await callDeepSeek(aiMessages, false, aiAbortController.signal);
     const hasPlan = detectPlanIntent(aiMessages.map(m => m.content).join(' '));
     aiMessages.push({ role: 'ai', content: reply, hasPlanPotential: hasPlan, planGenerated: false });
+    // Decrement guest AI calls after successful API call
+    if (currentUser && currentUser.role === 'guest') {
+      currentUser._aiCallsRemaining = Math.max(0, (currentUser._aiCallsRemaining ?? 1) - 1);
+      saveGuestWorkspace();
+    }
   } catch (err) {
     if (err.name === 'AbortError') {
       aiMessages.push({ role: 'ai', content: '⏹ 已停止生成' });
@@ -1911,6 +2065,14 @@ function detectPlanIntent(text) {
 async function triggerCapability(capId) {
   if (aiLoading) return;
 
+  // Guest limit check
+  if (currentUser && currentUser.role === 'guest') {
+    if ((currentUser._aiCallsRemaining ?? 0) <= 0) {
+      renderAi();
+      return;
+    }
+  }
+
   if (capId === 'make_plan') {
     openPlanModal();
     return;
@@ -1929,6 +2091,11 @@ async function triggerCapability(capId) {
     const reply = await callDeepSeek(aiMessages, false, aiAbortController.signal);
     const hasPlan = detectPlanIntent(aiMessages.map(m => m.content).join(' '));
     aiMessages.push({ role: 'ai', content: reply, hasPlanPotential: hasPlan, planGenerated: false });
+    // Decrement guest AI calls after successful API call
+    if (currentUser && currentUser.role === 'guest') {
+      currentUser._aiCallsRemaining = Math.max(0, (currentUser._aiCallsRemaining ?? 1) - 1);
+      saveGuestWorkspace();
+    }
   } catch (err) {
     if (err.name === 'AbortError') {
       aiMessages.push({ role: 'ai', content: '⏹ 已停止生成' });
@@ -1973,6 +2140,15 @@ async function submitPlan() {
   const desc = $('#planDescription').value.trim();
   if (!desc) return alert('请输入计划描述');
 
+  // Guest limit check
+  if (currentUser && currentUser.role === 'guest') {
+    if ((currentUser._aiCallsRemaining ?? 0) <= 0) {
+      closeModal('planModalOverlay');
+      renderAi();
+      return;
+    }
+  }
+
   closeModal('planModalOverlay');
 
   // Add user message
@@ -2009,6 +2185,11 @@ async function submitPlan() {
     cleanReply = cleanReply.trim();
 
     aiMessages.push({ role: 'ai', content: cleanReply, tasks: tasks });
+    // Decrement guest AI calls after successful API call
+    if (currentUser && currentUser.role === 'guest') {
+      currentUser._aiCallsRemaining = Math.max(0, (currentUser._aiCallsRemaining ?? 1) - 1);
+      saveGuestWorkspace();
+    }
   } catch (err) {
     if (err.name === 'AbortError') {
       aiMessages.push({ role: 'ai', content: '⏹ 已停止生成' });
@@ -2025,6 +2206,15 @@ async function submitPlan() {
 // ==================== SMART PLAN DETECTION ====================
 async function generatePlanFromChat(msgIndex) {
   if (aiLoading) return;
+
+  // Guest limit check
+  if (currentUser && currentUser.role === 'guest') {
+    if ((currentUser._aiCallsRemaining ?? 0) <= 0) {
+      renderAi();
+      return;
+    }
+  }
+
   const msg = aiMessages[msgIndex];
   if (!msg) return;
 
@@ -2096,6 +2286,11 @@ async function generatePlanFromChat(msgIndex) {
       planConfirmed: false,
       planQuery: contextMessages.filter(m => m.role === 'user').pop()?.content || 'AI 计划',
     });
+    // Decrement guest AI calls after successful API call
+    if (currentUser && currentUser.role === 'guest') {
+      currentUser._aiCallsRemaining = Math.max(0, (currentUser._aiCallsRemaining ?? 1) - 1);
+      saveGuestWorkspace();
+    }
   } catch (err) {
     if (err.name === 'AbortError') {
       aiMessages.push({ role: 'ai', content: '⏹ 已停止生成' });
@@ -2623,8 +2818,7 @@ async function init() {
     currentUser = { email: session.user.email, id: session.user.id };
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('appContainer').style.display = 'flex';
-    document.getElementById('sidebarUser').textContent = currentUser.email;
-    document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+    updateSidebarForUser();
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
     document.getElementById('appContainer').style.display = 'none';
@@ -2636,8 +2830,7 @@ async function init() {
       currentUser = { email: session.user.email, id: session.user.id };
       document.getElementById('loginOverlay').style.display = 'none';
       document.getElementById('appContainer').style.display = 'flex';
-      document.getElementById('sidebarUser').textContent = currentUser.email;
-      document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+      updateSidebarForUser();
       loadUserData().then(() => { updateBadges(); switchModule('today'); });
     } else if (event === 'SIGNED_OUT') {
       currentUser = null;

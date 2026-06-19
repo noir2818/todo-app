@@ -36,6 +36,7 @@ let authMode = 'login';
 let currentUser = null; // { username, email, id }
 const LOCAL_ACCOUNTS_KEY = 'todoapp_local_accounts';
 const LOCAL_SESSION_KEY = 'todoapp_local_session';
+const USER_PREFS_KEY = 'todoapp_user_prefs';
 
 function normalizeUsername(username) {
   return username.trim().toLowerCase();
@@ -77,6 +78,52 @@ function restoreLocalSession() {
   }
 }
 
+function getUserPrefs() {
+  try {
+    const raw = localStorage.getItem(USER_PREFS_KEY);
+    const prefs = raw ? JSON.parse(raw) : {};
+    return prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs : {};
+  } catch(e) {
+    return {};
+  }
+}
+
+function saveUserPrefs(prefs) {
+  try { localStorage.setItem(USER_PREFS_KEY, JSON.stringify(prefs)); } catch(e) {}
+}
+
+function getCurrentUserPrefs() {
+  const key = currentUser?.id || 'guest';
+  const allPrefs = getUserPrefs();
+  const savedPrefs = allPrefs[key] && typeof allPrefs[key] === 'object' ? allPrefs[key] : {};
+  return {
+    defaultModule: 'today',
+    compactMode: false,
+    notifications: (typeof Notification !== 'undefined' && Notification.permission === 'granted'),
+    weekStart: 'monday',
+    ...savedPrefs
+  };
+}
+
+function saveCurrentUserPrefs(prefs) {
+  const key = currentUser?.id || 'guest';
+  const allPrefs = getUserPrefs();
+  allPrefs[key] = { ...getCurrentUserPrefs(), ...prefs };
+  saveUserPrefs(allPrefs);
+  applyUserPreferences();
+}
+
+function getPreferredModule() {
+  const allowedModules = new Set(['today', 'tasks', 'pomodoro', 'memos', 'plans', 'settings']);
+  const preferred = getCurrentUserPrefs().defaultModule || 'today';
+  return allowedModules.has(preferred) ? preferred : 'today';
+}
+
+function applyUserPreferences() {
+  const prefs = getCurrentUserPrefs();
+  if (document.body) document.body.classList.toggle('compact-mode', !!prefs.compactMode);
+}
+
 async function hashPassword(password) {
   if (window.crypto?.subtle && window.TextEncoder) {
     const bytes = new TextEncoder().encode(password);
@@ -114,6 +161,7 @@ function isCloudUser() {
 function showAppShell() {
   document.getElementById('loginOverlay').style.display = 'none';
   document.getElementById('appContainer').style.display = 'flex';
+  applyUserPreferences();
 }
 
 function resetLoginForm() {
@@ -213,7 +261,7 @@ function enterApp() {
   updateSidebarForUser();
   loadUserData().then(() => {
     updateBadges();
-    switchModule('today');
+    switchModule(getPreferredModule());
   });
 }
 
@@ -268,6 +316,83 @@ function updateSidebarForUser() {
   btn.textContent = '退出';
   btn.className = 'logout-btn';
   btn.onclick = handleLogout;
+}
+
+async function updateCurrentUsername(newUsername) {
+  const username = normalizeUsername(newUsername);
+  if (!/^[a-z0-9_]{3,20}$/.test(username)) throw new Error('用户名需为3-20位字母、数字或下划线');
+  if (!isLoggedInUser()) throw new Error('请先登录');
+  if (currentUser.role === 'cloud') {
+    if (supabaseReady && supabaseClient?.auth?.updateUser) {
+      await supabaseClient.auth.updateUser({ data: { username } });
+    }
+    currentUser.username = username;
+    updateSidebarForUser();
+    return;
+  }
+  if (currentUser.role !== 'local') throw new Error('当前账号暂不支持修改用户名');
+  const accounts = getLocalAccounts();
+  const oldUsername = normalizeUsername(currentUser.username || '');
+  if (username !== oldUsername && accounts[username]) throw new Error('该用户名已被使用');
+  const entry = Object.entries(accounts).find(([key, account]) => key === oldUsername || account.id === currentUser.id);
+  if (!entry) throw new Error('未找到当前账号');
+  const [oldKey, account] = entry;
+  if (!account) throw new Error('未找到当前账号');
+  const stableId = account.id || currentUser.id || ('local_' + username);
+  delete accounts[oldKey];
+  accounts[username] = { ...account, username, id: stableId, updatedAt: new Date().toISOString() };
+  saveLocalAccounts(accounts);
+  currentUser = { id: stableId, username, role: 'local' };
+  saveLocalSession(username);
+  updateSidebarForUser();
+}
+
+async function updateCurrentPassword(currentPassword, newPassword) {
+  if (!isLoggedInUser()) throw new Error('请先登录');
+  if (currentUser.role !== 'local') throw new Error('当前账号暂不支持在本地修改密码');
+  if (!newPassword || newPassword.length < 6) throw new Error('新密码至少6个字符');
+  const accounts = getLocalAccounts();
+  const account = accounts[currentUser.username];
+  if (!account || account.passwordHash !== await hashPassword(currentPassword)) throw new Error('当前密码不正确');
+  account.passwordHash = await hashPassword(newPassword);
+  account.updatedAt = new Date().toISOString();
+  saveLocalAccounts(accounts);
+}
+
+function getWorkspaceSnapshot() {
+  return {
+    exportedAt: new Date().toISOString(),
+    user: currentUser ? { id: currentUser.id, username: currentUser.username || '', role: currentUser.role || 'guest' } : null,
+    tasks: STORE.tasks,
+    memos: STORE.memos,
+    plans: STORE.plans,
+    pomodoro: STORE.pomodoro,
+    preferences: getCurrentUserPrefs()
+  };
+}
+
+function exportWorkspaceData() {
+  const data = JSON.stringify(getWorkspaceSnapshot(), null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'todoapp-data-' + getTodayDateStr() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function clearWorkspaceData() {
+  if (!confirm('确定清空当前工作台数据吗？任务、备忘录、计划和番茄钟记录都会被删除。')) return;
+  STORE.tasks = [];
+  STORE.memos = [];
+  STORE.plans = [];
+  STORE.pomodoro = { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
+  saveStore();
+  updateBadges();
+  renderSettings();
 }
 
 function handleGuestLogout() {
@@ -476,18 +601,24 @@ function updateBadges() {
 }
 
 function switchModule(module) {
+  const titles = { today: '☀️ 今日任务', tasks: '📝 任务管理', memos: '📌 备忘录', pomodoro: '⏱ 番茄钟', ai: '🤖 AI助手', plans: '📋 计划管理', settings: '⚙️ 个人设置' };
+  const btnLabels = { today: '', tasks: '+ 新增任务', memos: '+ 新增备忘录', pomodoro: '', ai: '', plans: '', settings: '' };
+  let navItem = $(`.nav-item[data-module="${module}"]`);
+  if (!titles[module] || !navItem) {
+    module = 'today';
+    navItem = $(`.nav-item[data-module="${module}"]`);
+  }
+
   currentModule = module;
   $$('.nav-item').forEach(el => el.classList.remove('active'));
-  $(`.nav-item[data-module="${module}"]`).classList.add('active');
+  if (navItem) navItem.classList.add('active');
   editingTaskId = null;
   editingMemoId = null;
 
-  const titles = { today: '☀️ 今日任务', tasks: '📝 任务管理', memos: '📌 备忘录', pomodoro: '⏱ 番茄钟', ai: '🤖 AI助手', plans: '📋 计划管理' };
-  const btnLabels = { today: '', tasks: '+ 新增任务', memos: '+ 新增备忘录', pomodoro: '', ai: '', plans: '' };
   $('#moduleTitle').textContent = titles[module];
   const addBtn = $('#headerAddBtn');
   addBtn.textContent = btnLabels[module];
-  addBtn.style.display = (module === 'pomodoro' || module === 'today') ? 'none' : 'flex';
+  addBtn.style.display = (module === 'pomodoro' || module === 'today' || module === 'settings') ? 'none' : 'flex';
   addBtn.onclick = () => {
     if (module === 'tasks') openTaskModal();
     else if (module === 'memos') openMemoModal();
@@ -499,6 +630,7 @@ function switchModule(module) {
   else if (module === 'pomodoro') renderPomodoro();
   else if (module === 'ai') renderAi();
   else if (module === 'plans') renderPlans();
+  else if (module === 'settings') renderSettings();
 }
 
 // ==================== TASK MANAGEMENT ====================
@@ -2127,6 +2259,164 @@ function openTodayTaskDetail(el) {
   }
 }
 
+// ==================== SETTINGS ====================
+function renderSettings() {
+  const prefs = getCurrentUserPrefs();
+  const displayName = currentUser ? getUserDisplayName(currentUser) : '未登录';
+  const avatarText = displayName.charAt(0).toUpperCase();
+  const accountType = currentUser ? (currentUser.role === 'local' ? '本地账号' : currentUser.role === 'cloud' ? '云端账号' : '访客') : '未登录';
+  const dataScope = currentUser ? (currentUser.role === 'cloud' ? '云端同步 + 本地缓存' : '当前浏览器本地保存') : '未登录本地缓存';
+  const taskCount = STORE.tasks.length;
+  const memoCount = STORE.memos.length;
+  const planCount = STORE.plans.length;
+  const notificationDisabled = typeof Notification === 'undefined';
+  const html = `
+    <div class="settings-grid">
+      <aside class="settings-profile">
+        <div class="avatar-lg">${escHtml(avatarText)}</div>
+        <div class="name">${escHtml(displayName)}</div>
+        <div class="meta">${accountType}</div>
+        <div class="meta">任务 ${taskCount} · 备忘录 ${memoCount} · 计划 ${planCount}</div>
+        <div class="settings-actions">
+          ${currentUser ? '<button class="btn btn-secondary btn-sm" onclick="handleLogout()">退出登录</button>' : '<button class="btn btn-primary btn-sm" onclick="showLoginOverlay()">登录/注册</button>'}
+        </div>
+      </aside>
+      <div class="settings-sections">
+        <section class="settings-section">
+          <h3>个人资料</h3>
+          <div class="settings-row">
+            <label for="settingsUsername">用户名</label>
+            <input id="settingsUsername" type="text" value="${escHtml(currentUser?.username || '')}" ${currentUser ? '' : 'disabled'} placeholder="登录后可编辑">
+          </div>
+          <div class="settings-row">
+            <label>账号类型</label>
+            <input type="text" value="${accountType}" disabled>
+          </div>
+          <div class="settings-row">
+            <label>数据范围</label>
+            <input type="text" value="${dataScope}" disabled>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-primary" onclick="saveProfileSettings()" ${currentUser ? '' : 'disabled'}>保存资料</button>
+            <span class="settings-save-msg" id="profileSaveMsg"></span>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>账号安全</h3>
+          <div class="settings-row">
+            <label for="settingsCurrentPassword">当前密码</label>
+            <input id="settingsCurrentPassword" type="password" placeholder="${currentUser?.role === 'local' ? '请输入当前密码' : '仅本地账号可修改'}" ${currentUser?.role === 'local' ? '' : 'disabled'}>
+          </div>
+          <div class="settings-row">
+            <label for="settingsNewPassword">新密码</label>
+            <input id="settingsNewPassword" type="password" placeholder="至少6个字符" ${currentUser?.role === 'local' ? '' : 'disabled'}>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-primary" onclick="savePasswordSettings()" ${currentUser?.role === 'local' ? '' : 'disabled'}>更新密码</button>
+            <span class="settings-save-msg" id="passwordSaveMsg"></span>
+          </div>
+          <p class="settings-note">本地账号密码只保存在当前浏览器。更换浏览器或清理浏览器数据后，本地账号无法自动恢复。</p>
+        </section>
+
+        <section class="settings-section">
+          <h3>使用偏好</h3>
+          <div class="settings-row">
+            <label for="settingsDefaultModule">默认打开</label>
+            <select id="settingsDefaultModule">
+              <option value="today" ${prefs.defaultModule === 'today' ? 'selected' : ''}>今日任务</option>
+              <option value="tasks" ${prefs.defaultModule === 'tasks' ? 'selected' : ''}>任务管理</option>
+              <option value="pomodoro" ${prefs.defaultModule === 'pomodoro' ? 'selected' : ''}>番茄钟</option>
+              <option value="memos" ${prefs.defaultModule === 'memos' ? 'selected' : ''}>备忘录</option>
+              <option value="plans" ${prefs.defaultModule === 'plans' ? 'selected' : ''}>计划管理</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label for="settingsWeekStart">每周开始</label>
+            <select id="settingsWeekStart">
+              <option value="monday" ${prefs.weekStart === 'monday' ? 'selected' : ''}>周一</option>
+              <option value="sunday" ${prefs.weekStart === 'sunday' ? 'selected' : ''}>周日</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label for="settingsCompactMode">紧凑模式</label>
+            <input class="settings-toggle" id="settingsCompactMode" type="checkbox" ${prefs.compactMode ? 'checked' : ''}>
+          </div>
+          <div class="settings-row">
+            <label for="settingsNotifications">浏览器通知</label>
+            <input class="settings-toggle" id="settingsNotifications" type="checkbox" ${prefs.notifications ? 'checked' : ''} ${notificationDisabled ? 'disabled' : ''}>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-primary" onclick="savePreferenceSettings()">保存偏好</button>
+            <span class="settings-save-msg" id="prefsSaveMsg"></span>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>数据管理</h3>
+          <div class="settings-row">
+            <label>当前数据</label>
+            <input type="text" value="任务 ${taskCount}，备忘录 ${memoCount}，计划 ${planCount}" disabled>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-secondary" onclick="exportWorkspaceData()">导出数据</button>
+            <button class="btn btn-danger" onclick="clearWorkspaceData()">清空工作台</button>
+          </div>
+          <p class="settings-note">导出会保存当前工作台的任务、备忘录、计划、番茄钟和偏好设置。</p>
+        </section>
+      </div>
+    </div>`;
+  $('#contentArea').innerHTML = html;
+}
+
+function showSettingsMessage(id, text, isError = false) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : 'var(--success)';
+  setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 2600);
+}
+
+async function saveProfileSettings() {
+  try {
+    const username = document.getElementById('settingsUsername').value;
+    await updateCurrentUsername(username);
+    renderSettings();
+    showSettingsMessage('profileSaveMsg', '已保存');
+  } catch (err) {
+    showSettingsMessage('profileSaveMsg', err.message || '保存失败', true);
+  }
+}
+
+async function savePasswordSettings() {
+  try {
+    const currentPassword = document.getElementById('settingsCurrentPassword').value;
+    const newPassword = document.getElementById('settingsNewPassword').value;
+    await updateCurrentPassword(currentPassword, newPassword);
+    document.getElementById('settingsCurrentPassword').value = '';
+    document.getElementById('settingsNewPassword').value = '';
+    showSettingsMessage('passwordSaveMsg', '密码已更新');
+  } catch (err) {
+    showSettingsMessage('passwordSaveMsg', err.message || '更新失败', true);
+  }
+}
+
+async function savePreferenceSettings() {
+  const notificationsChecked = document.getElementById('settingsNotifications').checked;
+  if (notificationsChecked && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    await Notification.requestPermission();
+  }
+  const notificationsAllowed = notificationsChecked && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  saveCurrentUserPrefs({
+    defaultModule: document.getElementById('settingsDefaultModule').value,
+    weekStart: document.getElementById('settingsWeekStart').value,
+    compactMode: document.getElementById('settingsCompactMode').checked,
+    notifications: notificationsAllowed
+  });
+  renderSettings();
+  showSettingsMessage('prefsSaveMsg', notificationsChecked && !notificationsAllowed ? '通知权限未开启，其他偏好已保存' : '已保存', notificationsChecked && !notificationsAllowed);
+}
+
 // ==================== TASK BATCH OPERATIONS ====================
 function getSelectedTaskIds() {
   const cbs = document.querySelectorAll('.task-checkbox:checked');
@@ -2206,7 +2496,7 @@ async function _continueInit() {
     updateSidebarForUser();
     await loadUserData();
     updateBadges();
-    switchModule('today');
+    switchModule(getPreferredModule());
   } else if (supabaseReady) {
     try {
       const { data: { session } } = await supabaseClient.auth.getSession();
@@ -2221,7 +2511,7 @@ async function _continueInit() {
         updateSidebarForUser();
         await loadUserData();
         updateBadges();
-        switchModule('today');
+        switchModule(getPreferredModule());
       } else {
         await enterLocalMode('today');
       }
@@ -2235,7 +2525,7 @@ async function _continueInit() {
           };
           showAppShell();
           updateSidebarForUser();
-          loadUserData().then(() => { updateBadges(); switchModule('today'); });
+          loadUserData().then(() => { updateBadges(); switchModule(getPreferredModule()); });
         } else if (event === 'SIGNED_OUT') {
           enterLocalMode('today');
         }
@@ -2247,11 +2537,6 @@ async function _continueInit() {
     }
   } else {
     await enterLocalMode('today');
-  }
-
-  // Request notification permission
-  if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission();
   }
 
   // Nav clicks

@@ -33,7 +33,19 @@ let supabaseReady = false;
 
 // ==================== AUTH ====================
 let authMode = 'login';
-let currentUser = null; // { email, id }
+let currentUser = null; // { username, email, id }
+
+function usernameToAuthEmail(username) {
+  return username.toLowerCase() + '@todoapp.local';
+}
+
+function normalizeUsername(username) {
+  return username.trim().toLowerCase();
+}
+
+function getUserDisplayName(user) {
+  return user?.username || user?.email || '用户';
+}
 
 function toggleLoginMode() {
   if (authMode === 'login') {
@@ -62,11 +74,11 @@ function showAppShell() {
 }
 
 function resetLoginForm() {
-  const emailEl = document.getElementById('loginEmail');
+  const usernameEl = document.getElementById('loginUsername');
   const passwordEl = document.getElementById('loginPassword');
   const confirmEl = document.getElementById('loginConfirmPassword');
   const errorEl = document.getElementById('loginError');
-  if (emailEl) emailEl.value = '';
+  if (usernameEl) usernameEl.value = '';
   if (passwordEl) passwordEl.value = '';
   if (confirmEl) confirmEl.value = '';
   if (errorEl) errorEl.style.display = 'none';
@@ -76,8 +88,8 @@ function resetLoginForm() {
 function showLoginOverlay() {
   const overlay = document.getElementById('loginOverlay');
   if (overlay) overlay.style.display = 'flex';
-  const emailEl = document.getElementById('loginEmail');
-  if (emailEl) setTimeout(() => emailEl.focus(), 0);
+  const usernameEl = document.getElementById('loginUsername');
+  if (usernameEl) setTimeout(() => usernameEl.focus(), 0);
 }
 
 function closeLoginOverlay() {
@@ -95,17 +107,18 @@ async function enterLocalMode(module = 'today') {
 
 async function handleLogin() {
   var dbg = document.getElementById('_debugInfo');
-  const email = document.getElementById('loginEmail').value.trim();
+  const username = normalizeUsername(document.getElementById('loginUsername').value);
   const password = document.getElementById('loginPassword').value;
   const errorEl = document.getElementById('loginError');
+  const usernamePattern = /^[a-z0-9_]{3,20}$/;
 
   if (!supabaseReady) {
     errorEl.textContent = '登录服务暂时不可用，你仍可继续未登录使用。';
     errorEl.style.display = 'block'; return;
   }
 
-  if (!email) {
-    errorEl.textContent = '请输入邮箱地址';
+  if (!usernamePattern.test(username)) {
+    errorEl.textContent = '用户名需为3-20位字母、数字或下划线';
     errorEl.style.display = 'block'; return;
   }
   if (!password || password.length < 6) {
@@ -120,24 +133,28 @@ async function handleLogin() {
         errorEl.textContent = '两次输入的密码不一致';
         errorEl.style.display = 'block'; return;
       }
+      const email = usernameToAuthEmail(username);
       const { data, error } = await supabaseClient.auth.signUp({
         email, password,
-        options: { emailRedirectTo: window.location.href }
+        options: { data: { username } }
       });
       if (error) throw error;
       if (data.user && data.session) {
-        // Email auto-confirmed
-        currentUser = { email: data.user.email, id: data.user.id };
+        currentUser = { username, email: data.user.email, id: data.user.id };
         enterApp();
       } else {
-        // Email confirmation may be required
-        errorEl.textContent = '注册成功！请检查邮箱并确认验证链接后登录。';
+        errorEl.textContent = '注册成功，请使用用户名和密码登录。';
         errorEl.style.display = 'block';
       }
     } else {
+      const email = usernameToAuthEmail(username);
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      currentUser = { email: data.user.email, id: data.user.id };
+      currentUser = {
+        username: data.user.user_metadata?.username || username,
+        email: data.user.email,
+        id: data.user.id
+      };
       enterApp();
     }
   } catch (err) {
@@ -198,8 +215,9 @@ function updateSidebarForLocal() {
 
 function updateSidebarForUser() {
   if (!isLoggedInUser()) return;
-  document.getElementById('sidebarUser').textContent = currentUser.email;
-  document.getElementById('sidebarAvatar').textContent = currentUser.email.charAt(0).toUpperCase();
+  const displayName = getUserDisplayName(currentUser);
+  document.getElementById('sidebarUser').textContent = displayName;
+  document.getElementById('sidebarAvatar').textContent = displayName.charAt(0).toUpperCase();
   const btn = document.getElementById('sidebarLogoutBtn');
   btn.textContent = '退出';
   btn.className = 'logout-btn';
@@ -2119,7 +2137,11 @@ async function _continueInit() {
     try {
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session && session.user) {
-        currentUser = { email: session.user.email, id: session.user.id };
+        currentUser = {
+          username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
+          email: session.user.email,
+          id: session.user.id
+        };
         showAppShell();
         updateSidebarForUser();
         await loadUserData();
@@ -2130,7 +2152,11 @@ async function _continueInit() {
       }
       supabaseClient.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_IN' && session) {
-          currentUser = { email: session.user.email, id: session.user.id };
+          currentUser = {
+            username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
+            email: session.user.email,
+            id: session.user.id
+          };
           showAppShell();
           updateSidebarForUser();
           loadUserData().then(() => { updateBadges(); switchModule('today'); });

@@ -34,10 +34,8 @@ let supabaseReady = false;
 // ==================== AUTH ====================
 let authMode = 'login';
 let currentUser = null; // { username, email, id }
-
-function usernameToAuthEmail(username) {
-  return username.toLowerCase() + '@todoapp.local';
-}
+const LOCAL_ACCOUNTS_KEY = 'todoapp_local_accounts';
+const LOCAL_SESSION_KEY = 'todoapp_local_session';
 
 function normalizeUsername(username) {
   return username.trim().toLowerCase();
@@ -45,6 +43,47 @@ function normalizeUsername(username) {
 
 function getUserDisplayName(user) {
   return user?.username || user?.email || '用户';
+}
+
+function getLocalAccounts() {
+  try {
+    const raw = localStorage.getItem(LOCAL_ACCOUNTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch(e) {
+    return {};
+  }
+}
+
+function saveLocalAccounts(accounts) {
+  try { localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts)); } catch(e) {}
+}
+
+function saveLocalSession(username) {
+  try { localStorage.setItem(LOCAL_SESSION_KEY, username); } catch(e) {}
+}
+
+function clearLocalSession() {
+  try { localStorage.removeItem(LOCAL_SESSION_KEY); } catch(e) {}
+}
+
+function restoreLocalSession() {
+  try {
+    const username = localStorage.getItem(LOCAL_SESSION_KEY);
+    if (!username) return null;
+    const account = getLocalAccounts()[username];
+    return account ? { id: account.id, username: account.username || username, role: 'local' } : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+async function hashPassword(password) {
+  if (window.crypto?.subtle && window.TextEncoder) {
+    const bytes = new TextEncoder().encode(password);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  return 'plain:' + btoa(unescape(encodeURIComponent(password)));
 }
 
 function toggleLoginMode() {
@@ -66,6 +105,10 @@ function toggleLoginMode() {
 
 function isLoggedInUser() {
   return !!(currentUser && currentUser.id && currentUser.role !== 'guest');
+}
+
+function isCloudUser() {
+  return !!(currentUser && currentUser.id && currentUser.role === 'cloud');
 }
 
 function showAppShell() {
@@ -98,6 +141,7 @@ function closeLoginOverlay() {
 
 async function enterLocalMode(module = 'today') {
   currentUser = null;
+  clearLocalSession();
   showAppShell();
   updateSidebarForLocal();
   await loadUserData();
@@ -111,11 +155,8 @@ async function handleLogin() {
   const password = document.getElementById('loginPassword').value;
   const errorEl = document.getElementById('loginError');
   const usernamePattern = /^[a-z0-9_]{3,20}$/;
-
-  if (!supabaseReady) {
-    errorEl.textContent = '登录服务暂时不可用，你仍可继续未登录使用。';
-    errorEl.style.display = 'block'; return;
-  }
+  errorEl.textContent = '';
+  errorEl.style.display = 'none';
 
   if (!usernamePattern.test(username)) {
     errorEl.textContent = '用户名需为3-20位字母、数字或下划线';
@@ -127,34 +168,38 @@ async function handleLogin() {
   }
 
   try {
+    const accounts = getLocalAccounts();
     if (authMode === 'register') {
       const confirmPassword = document.getElementById('loginConfirmPassword').value;
       if (password !== confirmPassword) {
         errorEl.textContent = '两次输入的密码不一致';
         errorEl.style.display = 'block'; return;
       }
-      const email = usernameToAuthEmail(username);
-      const { data, error } = await supabaseClient.auth.signUp({
-        email, password,
-        options: { data: { username } }
-      });
-      if (error) throw error;
-      if (data.user && data.session) {
-        currentUser = { username, email: data.user.email, id: data.user.id };
-        enterApp();
-      } else {
-        errorEl.textContent = '注册成功，请使用用户名和密码登录。';
+      if (accounts[username]) {
+        errorEl.textContent = '该用户名已被注册，请换一个用户名或直接登录';
         errorEl.style.display = 'block';
+        return;
       }
-    } else {
-      const email = usernameToAuthEmail(username);
-      const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      currentUser = {
-        username: data.user.user_metadata?.username || username,
-        email: data.user.email,
-        id: data.user.id
+      const account = {
+        id: 'local_' + username,
+        username,
+        passwordHash: await hashPassword(password),
+        createdAt: new Date().toISOString()
       };
+      accounts[username] = account;
+      saveLocalAccounts(accounts);
+      currentUser = { id: account.id, username, role: 'local' };
+      saveLocalSession(username);
+      enterApp();
+    } else {
+      const account = accounts[username];
+      if (!account || account.passwordHash !== await hashPassword(password)) {
+        errorEl.textContent = '用户名或密码错误';
+        errorEl.style.display = 'block';
+        return;
+      }
+      currentUser = { id: account.id, username: account.username || username, role: 'local' };
+      saveLocalSession(username);
       enterApp();
     }
   } catch (err) {
@@ -173,7 +218,8 @@ function enterApp() {
 }
 
 async function handleLogout() {
-  if (supabaseReady) { try { await supabaseClient.auth.signOut(); } catch(e) {} }
+  if (isCloudUser() && supabaseReady) { try { await supabaseClient.auth.signOut(); } catch(e) {} }
+  clearLocalSession();
   resetLoginForm();
   enterLocalMode('today');
 }
@@ -259,6 +305,11 @@ async function loadUserData() {
     return;
   }
 
+  if (currentUser.role === 'local') {
+    loadStore();
+    return;
+  }
+
   // Guest mode: load from guest workspace only
   if (currentUser.role === 'guest') {
     const ws = getGuestWorkspace();
@@ -324,7 +375,7 @@ function saveStore() {
 
 // ==================== SUPABASE SYNC HELPERS ====================
 async function syncTaskToCloud(task) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try {
     await supabaseClient.from('tasks').upsert({
       id: task.id, user_id: currentUser.id, name: task.name, type: task.type,
@@ -336,12 +387,12 @@ async function syncTaskToCloud(task) {
 }
 
 async function deleteTaskFromCloud(id) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try { await supabaseClient.from('tasks').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteTaskFromCloud failed:', e); }
 }
 
 async function syncMemoToCloud(memo) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try {
     await supabaseClient.from('memos').upsert({
       id: memo.id, user_id: currentUser.id, title: memo.title, content: memo.content || '',
@@ -351,12 +402,12 @@ async function syncMemoToCloud(memo) {
 }
 
 async function deleteMemoFromCloud(id) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try { await supabaseClient.from('memos').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteMemoFromCloud failed:', e); }
 }
 
 async function syncPlanToCloud(plan) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try {
     await supabaseClient.from('plans').upsert({
       id: plan.id, user_id: currentUser.id, plan_name: plan.name,
@@ -366,12 +417,12 @@ async function syncPlanToCloud(plan) {
 }
 
 async function deletePlanFromCloud(id) {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try { await supabaseClient.from('plans').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deletePlanFromCloud failed:', e); }
 }
 
 async function syncPomodoroToCloud() {
-  if (!currentUser || !currentUser.id || currentUser.role === 'guest') return;
+  if (!isCloudUser()) return;
   try {
     await supabaseClient.from('pomodoro').upsert({
       user_id: currentUser.id, today_count: STORE.pomodoro.todayCount,
@@ -382,6 +433,22 @@ async function syncPomodoroToCloud() {
 }
 
 function genId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
+function toDateInputValue(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function startOfLocalDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function getDateAfterDays(dayOffset) {
+  const d = startOfLocalDay(new Date());
+  d.setDate(d.getDate() + dayOffset);
+  return d;
+}
 function fmtDate(d) { if (!d) return '-'; const dt = new Date(d); return dt.toLocaleDateString('zh-CN'); }
 function fmtDateTime(d) { if (!d) return '-'; const dt = new Date(d); return dt.toLocaleString('zh-CN'); }
 
@@ -1555,13 +1622,16 @@ async function generatePlanFromChat(msgIndex) {
       role: m.role,
       content: m.content,
     }));
+    const planStartDate = getTodayDate();
+    const planStartDateCn = `${planStartDate.getFullYear()}年${planStartDate.getMonth() + 1}月${planStartDate.getDate()}日`;
+    const planStartDateStr = toDateInputValue(planStartDate);
 
     const planPrompt = [...contextMessages, {
       role: 'user',
       content: `请将上述计划严格按天拆解为每日任务列表。要求：
 
 【按天分组】
-1. 从今天（2026年6月18日）开始作为 Day 1，之后依次 Day 2、Day 3……
+1. 从今天（${planStartDateCn}）开始作为 Day 1，之后依次 Day 2、Day 3……
 2. 每天分配 2-4 个具体任务，严禁把所有任务堆在同一天
 3. 每天的任务量应均衡，难易搭配
 
@@ -1578,8 +1648,8 @@ async function generatePlanFromChat(msgIndex) {
 先写分析说明（100字以内），再输出 JSON 代码块：
 \`\`\`json
 [
-  {"day":1,"name":"搭建Python开发环境","type":"normal","priority":"P1","dueDate":"2026-06-18","remark":"下载Python 3.12安装包并完成安装，配置PATH环境变量，安装VS Code及Python扩展插件，验证：终端输入python --version能正确输出版本号"},
-  {"day":1,"name":"编写第一个Hello World程序","type":"normal","priority":"P2","dueDate":"2026-06-18","remark":"在VS Code中创建hello.py文件，使用print函数输出'Hello, Python!'，运行并确认控制台正常打印，理解print函数的基本用法"}
+  {"day":1,"name":"搭建Python开发环境","type":"normal","priority":"P1","dueDate":"${planStartDateStr}","remark":"下载Python 3.12安装包并完成安装，配置PATH环境变量，安装VS Code及Python扩展插件，验证：终端输入python --version能正确输出版本号"},
+  {"day":1,"name":"编写第一个Hello World程序","type":"normal","priority":"P2","dueDate":"${planStartDateStr}","remark":"在VS Code中创建hello.py文件，使用print函数输出'Hello, Python!'，运行并确认控制台正常打印，理解print函数的基本用法"}
 ]
 \`\`\``,
     }];
@@ -1694,10 +1764,7 @@ function buildSelectableTaskCardsHtml(tasks, msgIndex) {
 }
 
 function getDayDate(dayNum) {
-  const today = new Date(2026, 5, 18); // June 18, 2026
-  const d = new Date(today);
-  d.setDate(d.getDate() + (dayNum - 1));
-  return d;
+  return getDateAfterDays(dayNum - 1);
 }
 
 function updateDaySelectAll(msgIndex, day) {
@@ -1915,13 +1982,12 @@ function deletePlan(planId) {
 }
 
 // ==================== TODAY TASKS ====================
-function getTodayDateStr() { return '2026-06-18'; }
-function getTodayDate() { return new Date(2026, 5, 18); }
+function getTodayDateStr() { return toDateInputValue(new Date()); }
+function getTodayDate() { return startOfLocalDay(new Date()); }
 
 function getTodayTasks() {
   const todayStr = getTodayDateStr();
-  const today = new Date(2026, 5, 18);
-  today.setHours(0, 0, 0, 0);
+  const today = getTodayDate();
   const items = [];
 
   // From task management: dueDate matches today
@@ -2133,14 +2199,23 @@ function closeModal(id) {
 
 // ==================== INIT ====================
 async function _continueInit() {
-  if (supabaseReady) {
+  const localSession = restoreLocalSession();
+  if (localSession) {
+    currentUser = localSession;
+    showAppShell();
+    updateSidebarForUser();
+    await loadUserData();
+    updateBadges();
+    switchModule('today');
+  } else if (supabaseReady) {
     try {
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session && session.user) {
         currentUser = {
           username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
           email: session.user.email,
-          id: session.user.id
+          id: session.user.id,
+          role: 'cloud'
         };
         showAppShell();
         updateSidebarForUser();
@@ -2155,7 +2230,8 @@ async function _continueInit() {
           currentUser = {
             username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
             email: session.user.email,
-            id: session.user.id
+            id: session.user.id,
+            role: 'cloud'
           };
           showAppShell();
           updateSidebarForUser();

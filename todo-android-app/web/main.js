@@ -37,9 +37,35 @@ let currentUser = null; // { username, email, id }
 const LOCAL_ACCOUNTS_KEY = 'todoapp_local_accounts';
 const LOCAL_SESSION_KEY = 'todoapp_local_session';
 const USER_PREFS_KEY = 'todoapp_user_prefs';
+const CLOUD_SYNC_TABLES = ['tasks', 'memos', 'plans', 'pomodoro'];
+const CLOUD_SYNC_POLL_MS = 45000;
 
 function normalizeUsername(username) {
   return username.trim().toLowerCase();
+}
+
+function normalizeLoginIdentifier(value) {
+  return (value || '').trim().toLowerCase();
+}
+
+function isEmailIdentifier(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function deriveUsernameFromEmail(email) {
+  const localPart = (email || '').split('@')[0] || 'cloud_user';
+  return localPart.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'cloud_user';
+}
+
+function getCloudUserFromSession(session) {
+  const user = session?.user;
+  if (!user) return null;
+  return {
+    username: user.user_metadata?.username || deriveUsernameFromEmail(user.email || ''),
+    email: user.email || '',
+    id: user.id,
+    role: 'cloud'
+  };
 }
 
 function getUserDisplayName(user) {
@@ -188,6 +214,7 @@ function closeLoginOverlay() {
 }
 
 async function enterLocalMode(module = 'today') {
+  teardownCloudSync();
   currentUser = null;
   clearLocalSession();
   showAppShell();
@@ -197,21 +224,85 @@ async function enterLocalMode(module = 'today') {
   switchModule(module);
 }
 
+async function handleCloudAuth(email, password, errorEl) {
+  if (!supabaseReady || !supabaseClient?.auth) {
+    errorEl.textContent = '云端账号需要网络连接，请稍后重试或使用本地用户名登录';
+    errorEl.style.display = 'block';
+    return;
+  }
+  if (!isEmailIdentifier(email)) {
+    errorEl.textContent = '请输入有效邮箱，或输入本地用户名使用离线账号';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  if (authMode === 'register') {
+    const confirmPassword = document.getElementById('loginConfirmPassword').value;
+    if (password !== confirmPassword) {
+      errorEl.textContent = '两次输入的密码不一致';
+      errorEl.style.display = 'block';
+      return;
+    }
+    const { data, error } = await supabaseClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { username: deriveUsernameFromEmail(email) },
+        emailRedirectTo: window.location.href
+      }
+    });
+    if (error) throw error;
+    if (data?.session) {
+      currentUser = getCloudUserFromSession(data.session);
+      clearLocalSession();
+      enterApp();
+      return;
+    }
+    if (authMode === 'register') toggleLoginMode();
+    errorEl.textContent = '注册成功，请前往邮箱确认后再登录';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  if (!data?.session) throw new Error('登录成功但没有拿到云端会话，请稍后重试');
+  currentUser = getCloudUserFromSession(data.session);
+  clearLocalSession();
+  enterApp();
+}
+
 async function handleLogin() {
   var dbg = document.getElementById('_debugInfo');
-  const username = normalizeUsername(document.getElementById('loginUsername').value);
+  const loginId = normalizeLoginIdentifier(document.getElementById('loginUsername').value);
   const password = document.getElementById('loginPassword').value;
   const errorEl = document.getElementById('loginError');
   const usernamePattern = /^[a-z0-9_]{3,20}$/;
   errorEl.textContent = '';
   errorEl.style.display = 'none';
 
-  if (!usernamePattern.test(username)) {
-    errorEl.textContent = '用户名需为3-20位字母、数字或下划线';
+  if (!loginId) {
+    errorEl.textContent = '请输入邮箱或本地用户名';
     errorEl.style.display = 'block'; return;
   }
   if (!password || password.length < 6) {
     errorEl.textContent = '密码不能为空，且至少6个字符';
+    errorEl.style.display = 'block'; return;
+  }
+
+  if (loginId.includes('@')) {
+    try {
+      await handleCloudAuth(loginId, password, errorEl);
+    } catch (err) {
+      errorEl.textContent = authMode === 'register' ? '云端注册失败：' + err.message : '云端登录失败：' + err.message;
+      errorEl.style.display = 'block';
+    }
+    return;
+  }
+
+  const username = normalizeUsername(loginId);
+  if (!usernamePattern.test(username)) {
+    errorEl.textContent = '本地用户名需为3-20位字母、数字或下划线';
     errorEl.style.display = 'block'; return;
   }
 
@@ -259,6 +350,8 @@ async function handleLogin() {
 function enterApp() {
   showAppShell();
   updateSidebarForUser();
+  if (isCloudUser()) setupCloudSync();
+  else teardownCloudSync();
   loadUserData().then(() => {
     updateBadges();
     switchModule(getPreferredModule());
@@ -266,6 +359,7 @@ function enterApp() {
 }
 
 async function handleLogout() {
+  teardownCloudSync();
   if (isCloudUser() && supabaseReady) { try { await supabaseClient.auth.signOut(); } catch(e) {} }
   clearLocalSession();
   resetLoginForm();
@@ -384,13 +478,15 @@ function exportWorkspaceData() {
   URL.revokeObjectURL(url);
 }
 
-function clearWorkspaceData() {
+async function clearWorkspaceData() {
   if (!confirm('确定清空当前工作台数据吗？任务、备忘录、计划和番茄钟记录都会被删除。')) return;
+  const shouldClearCloud = isCloudUser();
   STORE.tasks = [];
   STORE.memos = [];
   STORE.plans = [];
   STORE.pomodoro = { workMinutes: 25, breakMinutes: 5, todayCount: 0, todayDate: '' };
   saveStore();
+  if (shouldClearCloud) await clearCloudWorkspace();
   updateBadges();
   renderSettings();
 }
@@ -449,7 +545,10 @@ async function loadUserData() {
 
   try {
     // Load from Supabase in parallel (only if ready)
-    if (!supabaseReady) return;
+    if (!supabaseReady) {
+      loadStore();
+      return;
+    }
     const [tasksRes, memosRes, plansRes, pomoRes] = await Promise.all([
       supabaseClient.from('tasks').select('*').eq('user_id', currentUser.id),
       supabaseClient.from('memos').select('*').eq('user_id', currentUser.id),
@@ -500,7 +599,7 @@ function saveStore() {
 
 // ==================== SUPABASE SYNC HELPERS ====================
 async function syncTaskToCloud(task) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try {
     await supabaseClient.from('tasks').upsert({
       id: task.id, user_id: currentUser.id, name: task.name, type: task.type,
@@ -512,12 +611,12 @@ async function syncTaskToCloud(task) {
 }
 
 async function deleteTaskFromCloud(id) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try { await supabaseClient.from('tasks').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteTaskFromCloud failed:', e); }
 }
 
 async function syncMemoToCloud(memo) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try {
     await supabaseClient.from('memos').upsert({
       id: memo.id, user_id: currentUser.id, title: memo.title, content: memo.content || '',
@@ -527,12 +626,12 @@ async function syncMemoToCloud(memo) {
 }
 
 async function deleteMemoFromCloud(id) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try { await supabaseClient.from('memos').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deleteMemoFromCloud failed:', e); }
 }
 
 async function syncPlanToCloud(plan) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try {
     await supabaseClient.from('plans').upsert({
       id: plan.id, user_id: currentUser.id, plan_name: plan.name,
@@ -542,12 +641,12 @@ async function syncPlanToCloud(plan) {
 }
 
 async function deletePlanFromCloud(id) {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try { await supabaseClient.from('plans').delete().eq('id', id).eq('user_id', currentUser.id); } catch(e) { console.warn('deletePlanFromCloud failed:', e); }
 }
 
 async function syncPomodoroToCloud() {
-  if (!isCloudUser()) return;
+  if (!isCloudUser() || !supabaseReady) return;
   try {
     await supabaseClient.from('pomodoro').upsert({
       user_id: currentUser.id, today_count: STORE.pomodoro.todayCount,
@@ -555,6 +654,92 @@ async function syncPomodoroToCloud() {
       date: getTodayDateStr()
     }, { onConflict: 'user_id,date' });
   } catch(e) { console.warn('syncPomodoroToCloud failed:', e); }
+}
+
+async function clearCloudWorkspace() {
+  if (!isCloudUser() || !supabaseReady) return;
+  try {
+    await Promise.all([
+      supabaseClient.from('tasks').delete().eq('user_id', currentUser.id),
+      supabaseClient.from('memos').delete().eq('user_id', currentUser.id),
+      supabaseClient.from('plans').delete().eq('user_id', currentUser.id),
+      supabaseClient.from('pomodoro').delete().eq('user_id', currentUser.id)
+    ]);
+  } catch(e) {
+    console.warn('clearCloudWorkspace failed:', e);
+  }
+}
+
+let cloudSyncChannel = null;
+let cloudSyncTimer = null;
+let cloudRefreshTimer = null;
+let cloudRefreshInFlight = false;
+
+function handleCloudSyncFocus() {
+  scheduleCloudRefresh(0);
+}
+
+function handleCloudSyncVisibility() {
+  if (!document.hidden) scheduleCloudRefresh(0);
+}
+
+function teardownCloudSync() {
+  if (cloudSyncChannel && supabaseClient) {
+    try {
+      if (supabaseClient.removeChannel) supabaseClient.removeChannel(cloudSyncChannel);
+      else if (cloudSyncChannel.unsubscribe) cloudSyncChannel.unsubscribe();
+    } catch(e) {
+      console.warn('teardownCloudSync failed:', e);
+    }
+  }
+  cloudSyncChannel = null;
+  if (cloudSyncTimer) window.clearInterval(cloudSyncTimer);
+  if (cloudRefreshTimer) window.clearTimeout(cloudRefreshTimer);
+  cloudSyncTimer = null;
+  cloudRefreshTimer = null;
+  window.removeEventListener('focus', handleCloudSyncFocus);
+  document.removeEventListener('visibilitychange', handleCloudSyncVisibility);
+}
+
+function setupCloudSync() {
+  teardownCloudSync();
+  if (!isCloudUser() || !supabaseReady || !supabaseClient?.channel) return;
+
+  cloudSyncChannel = supabaseClient.channel('todo-workspace-' + currentUser.id);
+  CLOUD_SYNC_TABLES.forEach(table => {
+    cloudSyncChannel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table, filter: 'user_id=eq.' + currentUser.id },
+      () => scheduleCloudRefresh()
+    );
+  });
+  cloudSyncChannel.subscribe();
+
+  cloudSyncTimer = window.setInterval(() => {
+    if (!document.hidden) scheduleCloudRefresh(0);
+  }, CLOUD_SYNC_POLL_MS);
+  window.addEventListener('focus', handleCloudSyncFocus);
+  document.addEventListener('visibilitychange', handleCloudSyncVisibility);
+}
+
+function scheduleCloudRefresh(delay = 700) {
+  if (!isCloudUser()) return;
+  if (cloudRefreshTimer) window.clearTimeout(cloudRefreshTimer);
+  cloudRefreshTimer = window.setTimeout(refreshCloudWorkspace, delay);
+}
+
+async function refreshCloudWorkspace() {
+  if (!isCloudUser() || cloudRefreshInFlight) return;
+  cloudRefreshInFlight = true;
+  try {
+    await loadUserData();
+    updateBadges();
+    if (document.getElementById('contentArea')) switchModule(currentModule || getPreferredModule());
+  } catch(e) {
+    console.warn('refreshCloudWorkspace failed:', e);
+  } finally {
+    cloudRefreshInFlight = false;
+  }
 }
 
 function genId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
@@ -1457,6 +1642,7 @@ function addTaskFromAI(idx, btn) {
   };
   STORE.tasks.push(newTask);
   saveStore();
+  syncTaskToCloud(newTask);
   updateBadges();
   btn.textContent = '✓ 已添加';
   btn.classList.add('added');
@@ -1956,12 +2142,13 @@ function batchAddPlanTasks(msgIndex) {
   if (!msg || !msg.planTasks) return;
 
   let addedCount = 0;
+  const addedTasks = [];
   checkboxes.forEach(cb => {
     const ti = parseInt(cb.dataset.taskIndex);
     const taskData = msg.planTasks[ti];
     if (!taskData) return;
 
-    STORE.tasks.push({
+    const newTask = {
       id: genId(),
       name: taskData.name,
       type: taskData.type || 'normal',
@@ -1973,19 +2160,14 @@ function batchAddPlanTasks(msgIndex) {
       createdAt: new Date().toISOString(),
       relatedTasks: [],
       attachments: [],
-    });
+    };
+    STORE.tasks.push(newTask);
+    addedTasks.push(newTask);
     addedCount++;
   });
 
   saveStore();
-  // Sync added tasks to cloud
-  checkboxes.forEach(cb => {
-    const ti = parseInt(cb.dataset.taskIndex);
-    const taskData = msg.planTasks[ti];
-    if (!taskData) return;
-    const savedTask = STORE.tasks.find(t => t.name === taskData.name && t.dueDate === (taskData.dueDate || ''));
-    if (savedTask) syncTaskToCloud(savedTask);
-  });
+  addedTasks.forEach(task => syncTaskToCloud(task));
   updateBadges();
 
   // Mark the plan as confirmed with only the selected tasks
@@ -2008,6 +2190,7 @@ function batchAddPlanTasks(msgIndex) {
     totalDays: planDays.length,
   };
   STORE.plans.push(newPlan);
+  saveStore();
 
   // Sync new plan to cloud
   syncPlanToCloud(newPlan);
@@ -2491,24 +2674,51 @@ function closeModal(id) {
 
 // ==================== INIT ====================
 async function _continueInit() {
-  const localSession = restoreLocalSession();
-  if (localSession) {
-    currentUser = localSession;
-    showAppShell();
-    updateSidebarForUser();
-    await loadUserData();
-    updateBadges();
-    switchModule(getPreferredModule());
-  } else if (supabaseReady) {
+  if (supabaseReady) {
     try {
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session && session.user) {
-        currentUser = {
-          username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
-          email: session.user.email,
-          id: session.user.id,
-          role: 'cloud'
-        };
+        currentUser = getCloudUserFromSession(session);
+        clearLocalSession();
+        showAppShell();
+        updateSidebarForUser();
+        setupCloudSync();
+        await loadUserData();
+        updateBadges();
+        switchModule(getPreferredModule());
+      } else {
+        const localSession = restoreLocalSession();
+        if (localSession) {
+          currentUser = localSession;
+          teardownCloudSync();
+          showAppShell();
+          updateSidebarForUser();
+          await loadUserData();
+          updateBadges();
+          switchModule(getPreferredModule());
+        } else {
+          await enterLocalMode('today');
+        }
+      }
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          currentUser = getCloudUserFromSession(session);
+          clearLocalSession();
+          showAppShell();
+          updateSidebarForUser();
+          setupCloudSync();
+          loadUserData().then(() => { updateBadges(); switchModule(getPreferredModule()); });
+        } else if (event === 'SIGNED_OUT') {
+          teardownCloudSync();
+          enterLocalMode('today');
+        }
+      });
+    } catch(e) {
+      console.warn('Supabase 会话检查失败:', e.message);
+      supabaseReady = false;
+      const localSession = restoreLocalSession();
+      if (localSession) {
+        currentUser = localSession;
         showAppShell();
         updateSidebarForUser();
         await loadUserData();
@@ -2517,28 +2727,19 @@ async function _continueInit() {
       } else {
         await enterLocalMode('today');
       }
-      supabaseClient.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' && session) {
-          currentUser = {
-            username: session.user.user_metadata?.username || (session.user.email || '').split('@')[0],
-            email: session.user.email,
-            id: session.user.id,
-            role: 'cloud'
-          };
-          showAppShell();
-          updateSidebarForUser();
-          loadUserData().then(() => { updateBadges(); switchModule(getPreferredModule()); });
-        } else if (event === 'SIGNED_OUT') {
-          enterLocalMode('today');
-        }
-      });
-    } catch(e) {
-      console.warn('Supabase 会话检查失败:', e.message);
-      supabaseReady = false;
-      await enterLocalMode('today');
     }
   } else {
-    await enterLocalMode('today');
+    const localSession = restoreLocalSession();
+    if (localSession) {
+      currentUser = localSession;
+      showAppShell();
+      updateSidebarForUser();
+      await loadUserData();
+      updateBadges();
+      switchModule(getPreferredModule());
+    } else {
+      await enterLocalMode('today');
+    }
   }
 
   // Nav clicks

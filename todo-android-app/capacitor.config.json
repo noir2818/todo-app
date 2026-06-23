@@ -1,0 +1,8 @@
+{
+  "appId": "com.noir2818.todoworkbench",
+  "appName": "Todo 工作台",
+  "webDir": "web",
+  "server": {
+    "androidScheme": "https"
+  }
+}
